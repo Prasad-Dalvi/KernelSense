@@ -132,3 +132,17 @@ def get_health_history(limit=50):
 
     finally:
         connection.close()
+def save_current_health():
+    from linux.cpu import get_cpu_usage
+    from linux.memory import get_memory_info
+    from linux.storage import get_root_disk_usage
+
+    cpu = get_cpu_usage()
+    memory = get_memory_info()
+    disk = get_root_disk_usage()
+
+    return save_health(
+        cpu_usage=cpu,
+        memory_usage=memory["usage_percent"],
+        disk_usage=disk["usage_percent"]
+    )
