@@ -1,10 +1,13 @@
 import subprocess
 import time
 
+from database.database import save_command
 
-def execute_command(command):
+
+def execute_command(command, risk="safe"):
     """
-    Execute a Linux command without using a shell.
+    Execute a Linux command without using a shell
+    and save the execution result to SQLite.
     """
 
     start_time = time.perf_counter()
@@ -23,12 +26,23 @@ def execute_command(command):
             2
         )
 
+        success = result.returncode == 0
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        save_command(
+            command=" ".join(command),
+            risk=risk,
+            status="success" if success else "failed",
+            output=stdout if success else stderr
+        )
+
         return {
             "command": command,
-            "success": result.returncode == 0,
+            "success": success,
             "return_code": result.returncode,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
+            "stdout": stdout,
+            "stderr": stderr,
             "execution_time_ms": execution_time_ms
         }
 
@@ -37,6 +51,13 @@ def execute_command(command):
         execution_time_ms = round(
             (time.perf_counter() - start_time) * 1000,
             2
+        )
+
+        save_command(
+            command=" ".join(command),
+            risk=risk,
+            status="timeout",
+            output="Command timed out"
         )
 
         return {
@@ -55,6 +76,13 @@ def execute_command(command):
             2
         )
 
+        save_command(
+            command=" ".join(command),
+            risk=risk,
+            status="failed",
+            output="Command not found"
+        )
+
         return {
             "command": command,
             "success": False,
@@ -69,6 +97,13 @@ def execute_command(command):
         execution_time_ms = round(
             (time.perf_counter() - start_time) * 1000,
             2
+        )
+
+        save_command(
+            command=" ".join(command),
+            risk=risk,
+            status="failed",
+            output=str(error)
         )
 
         return {
