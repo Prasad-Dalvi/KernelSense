@@ -8,6 +8,7 @@ from backend.routes import network
 from backend.routes import files
 from backend.routes import logs
 from backend.routes import commands
+from backend.routes.history import router as history_router
 
 
 app = FastAPI(
@@ -71,4 +72,5 @@ app.include_router(
 app.include_router(
     commands.router,
     prefix="/api/v1"
-)   
+)
+app.include_router(history_router, prefix="/api/v1")
