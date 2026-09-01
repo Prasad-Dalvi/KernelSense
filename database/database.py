@@ -21,3 +21,114 @@ def test_connection():
         return result[0] == 1
     finally:
         connection.close()
+
+
+def create_tables():
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS command_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                command TEXT NOT NULL,
+                risk TEXT,
+                status TEXT,
+                output TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS health_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cpu_usage REAL,
+                memory_usage REAL,
+                disk_usage REAL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        connection.commit()
+
+    finally:
+        connection.close()
+
+
+def save_command(command, risk, status, output):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            INSERT INTO command_history
+            (command, risk, status, output)
+            VALUES (?, ?, ?, ?)
+        """, (command, risk, status, output))
+
+        connection.commit()
+
+        return cursor.lastrowid
+
+    finally:
+        connection.close()
+
+
+def get_command_history(limit=50):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT *
+            FROM command_history
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    finally:
+        connection.close()
+
+
+def save_health(cpu_usage, memory_usage, disk_usage):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            INSERT INTO health_history
+            (cpu_usage, memory_usage, disk_usage)
+            VALUES (?, ?, ?)
+        """, (cpu_usage, memory_usage, disk_usage))
+
+        connection.commit()
+
+        return cursor.lastrowid
+
+    finally:
+        connection.close()
+
+
+def get_health_history(limit=50):
+    connection = get_connection()
+
+    try:
+        cursor = connection.cursor()
+
+        cursor.execute("""
+            SELECT *
+            FROM health_history
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    finally:
+        connection.close()
