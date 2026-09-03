@@ -280,9 +280,21 @@ Searched all local drives for **`{search_target}`** — no matching files found.
     def _handle_linux_command(self, ai_result: Dict, query: str) -> Dict:
         raw_command  = ai_result.get("linux_command") or query
         title        = ai_result.get("linux_title")  or "🐧 Linux Command Execution"
-        explanation  = ai_result.get("linux_explanation") or "Executes the command in Ubuntu Linux."
         task_type    = ai_result.get("linux_task_type") or "RAW_COMMAND"
         provider     = ai_result.get("provider", "gemini")
+
+        # For IP address queries: show BOTH Windows host IP (matching ipconfig) AND Ubuntu WSL2 IP
+        if task_type == "IP_ADDRESS" or ("ip" in query.lower() and ("address" in query.lower() or "my ip" in query.lower() or "config" in query.lower())):
+            raw_command = (
+                "echo '=== [1/3] Windows Host IP (Wi-Fi / LAN) ==='; "
+                "ipconfig.exe | grep -i 'IPv4' | tr -d '\\r'; echo ''; "
+                "echo '=== [2/3] Ubuntu Linux (WSL2) Virtual IP ==='; "
+                "hostname -I 2>/dev/null || ip -br a; echo ''; "
+                "echo '=== [3/3] Public Internet IP ==='; "
+                "curl -s --max-time 2 ifconfig.me 2>/dev/null && echo '' || echo 'N/A'"
+            )
+            title = "🌐 Comprehensive Windows Host & Ubuntu WSL2 IP Discovery"
+            explanation = "Queries Windows ipconfig.exe for your physical Wi-Fi/LAN IP, Ubuntu Linux for the WSL2 virtual IP, and checks your public internet IP."
 
         ubuntu_cmd = (
             f'wsl.exe -d Ubuntu bash -c "'
