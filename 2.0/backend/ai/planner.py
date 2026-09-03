@@ -280,6 +280,7 @@ Searched all local drives for **`{search_target}`** — no matching files found.
     def _handle_linux_command(self, ai_result: Dict, query: str) -> Dict:
         raw_command  = ai_result.get("linux_command") or query
         title        = ai_result.get("linux_title")  or "🐧 Linux Command Execution"
+        explanation  = ai_result.get("linux_explanation") or f"Executes `{raw_command}` inside the Ubuntu Linux environment."
         task_type    = ai_result.get("linux_task_type") or "RAW_COMMAND"
         provider     = ai_result.get("provider", "gemini")
 
