@@ -1,0 +1,118 @@
+.card {
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 120px;
+}
+
+.topRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.titleInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.title {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.iconBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border);
+  color: var(--color-cyan);
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.card:hover .iconBadge {
+  background: rgba(0, 242, 254, 0.12);
+  border-color: var(--color-border-cyan);
+  color: #fff;
+  box-shadow: 0 0 16px var(--color-cyan-glow);
+  transform: scale(1.05);
+}
+
+.valueRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.value {
+  font-family: var(--font-heading);
+  font-size: 32px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.unit {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--color-cyan);
+  font-family: var(--font-heading);
+}
+
+.trendPill {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  border: 1px solid;
+}
+.trendUp   { background: var(--color-danger-dim);  color: var(--color-danger);  border-color: rgba(244, 63, 94, 0.3); }
+.trendDown { background: var(--color-success-dim); color: var(--color-success); border-color: rgba(16, 185, 129, 0.3); }
+
+.progressWrap {
+  margin-top: 12px;
+}
+
+.progressBarBg {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.progressBarFill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--grad-primary);
+  box-shadow: 0 0 10px var(--color-cyan-glow);
+  transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.good .progressBarFill    { background: var(--grad-emerald); box-shadow: 0 0 10px var(--color-emerald-glow); }
+.warning .progressBarFill { background: var(--grad-purple);  box-shadow: 0 0 10px var(--color-purple-glow); }
+.critical .progressBarFill{ background: var(--grad-danger);  box-shadow: 0 0 10px rgba(244, 63, 94, 0.5); }

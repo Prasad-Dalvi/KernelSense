@@ -1,0 +1,196 @@
+.card {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+}
+
+/* Risk left accent */
+.low      { border-left: 2px solid var(--color-success); }
+.medium   { border-left: 2px solid var(--color-warning); }
+.high     { border-left: 2px solid var(--color-danger);  }
+.critical { border-left: 2px solid var(--color-danger); background: rgba(255,51,51,0.03); }
+
+/* ── ASCII box header ── */
+.boxTop {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+  overflow: hidden;
+  flex-wrap: nowrap;
+}
+
+.boxCorner { color: var(--color-border-strong); flex-shrink: 0; }
+.boxLine   { color: var(--color-border);  overflow: hidden; flex-shrink: 1; }
+
+.boxTitle {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.riskSymbol {
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.low    .riskSymbol { color: var(--color-success); }
+.medium .riskSymbol { color: var(--color-warning); }
+.high   .riskSymbol,
+.critical .riskSymbol { color: var(--color-danger); }
+
+/* ── Body ── */
+.boxBody {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Command ── */
+.cmd {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  padding: 7px 10px;
+  border-radius: 2px;
+  color: var(--color-accent);
+  word-break: break-all;
+}
+
+/* ── Explanation ── */
+.explanation {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+.commentHash { color: var(--color-green-muted); font-style: normal; }
+
+/* ── Warning ── */
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-danger-dim);
+  border: 1px solid var(--color-danger);
+  border-radius: 2px;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--color-danger);
+}
+
+/* ── Actions ── */
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.rejectBtn {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-strong);
+  padding: 4px 14px;
+  border-radius: 2px;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.04em;
+}
+.rejectBtn:hover { border-color: var(--color-danger); color: var(--color-danger); }
+.rejectBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.approveBtn {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 2px;
+  border: 1px solid;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.04em;
+}
+
+.approveBtn.low    { color: var(--color-success); border-color: var(--color-success); }
+.approveBtn.medium { color: var(--color-warning); border-color: var(--color-warning); }
+.approveBtn.high,
+.approveBtn.critical { color: var(--color-danger); border-color: var(--color-danger); }
+
+.approveBtn.low:hover    { background: var(--color-success-dim); box-shadow: 0 0 8px rgba(0,255,65,0.3); }
+.approveBtn.medium:hover { background: var(--color-warning-dim); }
+.approveBtn.high:hover,
+.approveBtn.critical:hover { background: var(--color-danger-dim); }
+.approveBtn:disabled     { opacity: 0.3; cursor: not-allowed; }
+
+/* ── ASCII bottom border ── */
+.boxBottom {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+/* ── Executed / Rejected ── */
+.executed {
+  border-left: 2px solid var(--color-success) !important;
+  padding: 10px 12px;
+}
+
+.executedHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-success);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.rejected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  opacity: 0.5;
+}
+
+.rejectedLabel {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.output {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  border-radius: 2px;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}

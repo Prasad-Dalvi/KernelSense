@@ -1,0 +1,426 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.loadingState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+}
+
+.loadingBox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 32px;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+/* ── 1. Hero Banner ── */
+.heroBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 32px;
+  gap: 28px;
+  min-height: 200px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(16, 23, 40, 0.85) 0%, rgba(10, 14, 26, 0.85) 100%);
+  border: 1px solid rgba(0, 242, 254, 0.20);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.heroBanner::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  right: -10%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(0, 242, 254, 0.15) 0%, rgba(139, 92, 246, 0.1) 60%, transparent 80%);
+  filter: blur(60px);
+  pointer-events: none;
+}
+
+.heroContent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 2;
+  max-width: 680px;
+}
+
+.heroBadgeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.systemPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(0, 242, 254, 0.10);
+  border: 1px solid rgba(0, 242, 254, 0.30);
+  color: var(--color-cyan);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pulseDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-cyan);
+  box-shadow: 0 0 8px var(--color-cyan);
+  animation: pulse 1.4s ease infinite;
+}
+
+.specPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.heroTitle {
+  font-size: 28px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.heroSubtitle {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.heroActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.secondaryBtn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--color-border);
+  color: #fff;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.secondaryBtn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.heroImageWrap {
+  position: relative;
+  width: 280px;
+  height: 160px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 242, 254, 0.3);
+  box-shadow: 0 8px 32px rgba(0, 242, 254, 0.2);
+  flex-shrink: 0;
+}
+
+@media (max-width: 900px) {
+  .heroImageWrap { display: none; }
+}
+
+.heroImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.05);
+  transition: transform 0.6s ease;
+}
+.heroBanner:hover .heroImg { transform: scale(1.1); }
+
+.heroImageOverlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 40%, rgba(6, 8, 14, 0.8) 100%);
+  pointer-events: none;
+}
+
+/* ── 2. Cards Grid ── */
+.cardsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .cardsGrid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .cardsGrid { grid-template-columns: 1fr; }
+}
+
+/* ── 3. Tri-Pane Suite ── */
+.triPaneGrid {
+  display: grid;
+  grid-template-columns: 320px 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 1200px) {
+  .triPaneGrid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 800px) {
+  .triPaneGrid { grid-template-columns: 1fr; }
+}
+
+/* ── Panel Header ── */
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.panelTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerIconCyan { color: var(--color-cyan); filter: drop-shadow(0 0 6px var(--color-cyan-glow)); }
+.headerIconPurple { color: var(--color-purple); filter: drop-shadow(0 0 6px var(--color-purple-glow)); }
+
+.panelTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.activeTag, .statRate {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.activeTag {
+  background: var(--color-emerald-glow);
+  color: var(--color-emerald);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.statRate {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+/* ── Health Score Center ── */
+.healthPanel, .chartPanel, .eventsPanel {
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.healthScoreCenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0 16px;
+}
+
+.gaugeContainer {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gaugeSvg {
+  width: 100%;
+  height: 100%;
+}
+
+.gaugeCenterText {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  margin-top: 42px;
+}
+
+.scoreNumber {
+  font-family: var(--font-heading);
+  font-size: 34px;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+}
+
+.scoreOutOf {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.healthStatusText {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--color-cyan);
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+}
+
+/* ── Categories ── */
+.categoriesList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.catRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.catHeader {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.catName { color: var(--color-text-secondary); }
+.catScore { font-family: var(--font-mono); }
+
+.catProgressBg {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.catProgressFill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── Tooltips ── */
+.chartTooltip {
+  background: rgba(13, 19, 33, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border-strong);
+  padding: 8px 12px;
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tooltipLabel {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.tooltipVal {
+  font-size: 14px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+}
+
+.refreshBtn {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  transition: all var(--transition-fast);
+}
+.refreshBtn:hover {
+  background: var(--color-bg-hover);
+  color: #fff;
+  border-color: var(--color-border-cyan);
+}
+
+.eventsPanel {
+  padding: 0;
+}
+
+.eventsScroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.eventsLoading {
+  padding: 20px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.errorState {
+  padding: 40px;
+  text-align: center;
+  color: var(--color-danger);
+}
+
+.chartAreaWrap {
+  width: 100%;
+  height: 110px;
+  min-height: 110px;
+  min-width: 0;
+  position: relative;
+}
+

@@ -1,0 +1,337 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 10px;
+  font-family: var(--font-mono);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 20px;
+}
+
+.errorLine {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 20px;
+}
+
+.retryBtn {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  padding: 2px 10px;
+  border-radius: 2px;
+  transition: all var(--transition-fast);
+}
+.retryBtn:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+/* ── BTOP Telemetry Summary Bar ── */
+.telemetryHeader {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 8px 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  flex-wrap: wrap;
+  font-size: 10px;
+}
+
+.teleItem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.teleKey {
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+.teleVal {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
+.teleValGreen {
+  color: var(--color-green-bright);
+  font-weight: 800;
+  text-shadow: 0 0 6px var(--color-green-glow);
+}
+
+.teleValAccent {
+  color: var(--color-accent);
+  font-weight: 800;
+}
+
+/* ── Toolbar ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--color-bg-glass);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.searchWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 240px;
+  background: var(--color-bg-input);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  padding: 5px 10px;
+  transition: all var(--transition-fast);
+}
+
+.searchWrap:focus-within {
+  border-color: var(--color-green);
+  box-shadow: 0 0 12px var(--color-green-dim);
+}
+
+.searchIcon {
+  color: var(--color-green);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-primary);
+  caret-color: var(--color-green);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-muted);
+}
+
+.clearSearchBtn {
+  all: unset;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  padding: 0 4px;
+}
+.clearSearchBtn:hover { color: var(--color-danger); }
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.matchCount {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+}
+
+.refreshBtn {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 2px;
+  transition: all var(--transition-fast);
+  background: var(--color-bg-elevated);
+}
+.refreshBtn:hover {
+  border-color: var(--color-green);
+  color: var(--color-green-bright);
+  box-shadow: 0 0 8px var(--color-green-dim);
+}
+
+/* ── Table Wrap ── */
+.tableWrap {
+  flex: 1;
+  overflow: auto;
+  background: var(--color-bg-glass);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thead {
+  background: var(--color-bg-elevated);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  user-select: none;
+  border-bottom: 1px solid var(--color-border-strong);
+}
+
+.sortable {
+  cursor: pointer;
+}
+.sortable:hover {
+  color: var(--color-green-bright);
+}
+
+.sortActive {
+  color: var(--color-green);
+  filter: drop-shadow(0 0 4px var(--color-green));
+}
+
+.sortPlaceholder {
+  color: var(--color-text-muted);
+  opacity: 0.3;
+}
+
+.row {
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition-fast);
+}
+.row:hover {
+  background: var(--color-bg-hover);
+}
+
+.td {
+  padding: 7px 12px;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.pid {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.nameCell {
+  max-width: 220px;
+}
+
+.procName {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageWrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usageNum {
+  font-size: 11px;
+  min-width: 44px;
+  font-variant-numeric: tabular-nums;
+}
+
+.inlineBarWrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.miniSegment {
+  width: 5px;
+  height: 8px;
+  border-radius: 1px;
+}
+
+.miniEmpty {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+}
+
+.mem {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.user {
+  color: var(--color-info);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.stateBadge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid;
+  letter-spacing: 0.05em;
+  background: var(--color-bg-primary);
+}
+
+.diagnoseBtn {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--color-accent);
+  padding: 2px 7px;
+  border: 1px solid var(--color-accent-dim);
+  border-radius: 2px;
+  transition: all var(--transition-fast);
+  background: var(--color-bg-primary);
+}
+.diagnoseBtn:hover {
+  border-color: var(--color-accent);
+  color: #fff;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent);
+}
