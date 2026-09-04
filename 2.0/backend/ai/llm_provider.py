@@ -57,8 +57,8 @@ RULES:
 - FILE_SEARCH: find/search/open/read + filename (set search_target=filename)
 - LINUX_CORE_COMMAND: any Linux/OS info request — IP, username, hostname, ports, CPU, disk, whoami, lscpu, etc.
   Linux commands: IP→"hostname -I; ip -br a", whoami→"whoami; id; w", ports→"ss -tulnp", cpu→"lscpu", disk→"df -h; lsblk", hostname→"hostname; uname -a; cat /etc/os-release"
-- OPEN_URL_IN_APP: open any website — resolve full https:// URL for ANY site
-- OPEN_APPLICATION: open desktop app (notepad, calculator, paint, terminal, etc.)
+- OPEN_APPLICATION: open desktop applications, software, tools, or PC games installed on the system (e.g. valorant, riot games / riot client, steam, discord, vlc, packet tracer, codeblocks, notepad, calculator, paint, terminal, vscode, excel, word, spotify, etc.). Set target_app to the app/game name.
+- OPEN_URL_IN_APP: open websites or web pages in browser (e.g. youtube, google, github, stackoverflow, reddit, netflix, etc. or queries with explicit 'on chrome'/'on brave'). Set target_url and browser.
 - SYSTEM_DIAGNOSIS/MEMORY_DIAGNOSIS/CPU_DIAGNOSIS: performance questions — use telemetry context
 - GENERAL_QUERY: everything else — answer fully in response_markdown like an expert engineer"""
 

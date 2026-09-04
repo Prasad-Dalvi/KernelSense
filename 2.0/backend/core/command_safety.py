@@ -98,29 +98,7 @@ class CommandSafetyEngine:
         # ─── A. WSL / Interactive Ubuntu Terminal Commands ────────────────────
         if 'wsl' in exec_cmd.lower() or 'ubuntu' in exec_cmd.lower():
             try:
-                # Fix bare Windows desktop app invocations inside WSL command if needed
                 fixed_cmd = exec_cmd
-                app_map = {
-                    'calculator': 'calc',
-                    'calc': 'calc',
-                    'notepad': 'notepad',
-                    'mspaint': 'mspaint',
-                    'paint': 'mspaint',
-                    'whatsapp': 'whatsapp:',
-                    'watsapp': 'whatsapp:',
-                    'whatsup': 'whatsapp:',
-                    'spotify': 'spotify',
-                    'taskmgr': 'taskmgr',
-                    'task manager': 'taskmgr',
-                    'explorer': 'explorer'
-                }
-                detected_win_app = None
-                for k in sorted(app_map.keys(), key=len, reverse=True):
-                    pattern = rf'(?<!start\s)(?<!start\s"")\b{re.escape(k)}\b(?=\s*;|\s*&&|\s*\"|\s*\')'
-                    if re.search(pattern, fixed_cmd, re.I):
-                        detected_win_app = app_map[k]
-                        fixed_cmd = re.sub(pattern, f'cmd.exe /c start {detected_win_app}', fixed_cmd, count=1, flags=re.I)
-                        break
 
                 # Wrap with cmd.exe /c start to guarantee visible interactive console on desktop
                 if not fixed_cmd.startswith('cmd.exe /c start'):
@@ -130,15 +108,43 @@ class CommandSafetyEngine:
                     
                 subprocess.Popen(spawn_cmd, shell=True)
 
-                # Direct parallel Windows launch for instant responsiveness
-                if detected_win_app:
-                    try:
-                        if detected_win_app.endswith(':'):
-                            subprocess.Popen(f'powershell.exe -NoProfile -Command "Start-Process \'{detected_win_app}\'"', shell=True)
-                        else:
-                            subprocess.Popen(f'cmd.exe /c start {detected_win_app}', shell=True)
-                    except Exception:
-                        pass
+                # Direct parallel Windows launch for 100% desktop app launch reliability
+                try:
+                    from windows.apps import app_registry
+                    app_to_launch = None
+
+                    # 1. Check if the banner identifies the app: e.g. "KernelSense: Launching VALORANT;"
+                    banner_match = re.search(r'KernelSense:\s*Launching\s+([^;\"]+)', fixed_cmd, re.I)
+                    if banner_match:
+                        app_to_launch = banner_match.group(1).strip()
+
+                    # 2. Check if an explicit shortcut or exe path is in the command
+                    import ctypes
+                    path_match = re.search(r'([A-Za-z]:[/\\].+?\.(?:lnk|exe))', fixed_cmd, re.I)
+                    if path_match:
+                        target_path = path_match.group(1).replace('/', '\\').strip('"\'')
+                        if os.path.exists(target_path):
+                            ctypes.windll.shell32.ShellExecuteW(None, "open", target_path, None, None, 1)
+                            app_to_launch = None # already launched directly
+
+                    # 3. If app was identified by banner, launch via app_registry
+                    if app_to_launch:
+                        found = app_registry.find_app(app_to_launch)
+                        if found:
+                            ftarget = found.get("target")
+                            ftype = found.get("type")
+                            if ftype == "lnk":
+                                ctypes.windll.shell32.ShellExecuteW(None, "open", ftarget, None, None, 1)
+                            elif ftype == "builtin":
+                                subprocess.Popen(f'cmd.exe /c start {ftarget}', shell=True)
+                            elif ftype == "exe":
+                                subprocess.Popen([ftarget], cwd=os.path.dirname(ftarget))
+                            elif ftype == "protocol":
+                                ctypes.windll.shell32.ShellExecuteW(None, "open", ftarget, None, None, 1)
+                            elif ftype == "uwp":
+                                subprocess.Popen(f'powershell.exe -NoProfile -Command "Start-Process \'shell:AppsFolder\\{ftarget}\'"', shell=True)
+                except Exception:
+                    pass
 
                 return {
                     "success": True,
@@ -166,7 +172,7 @@ class CommandSafetyEngine:
 
         # ─── C. GUI Application Launches ──────────────────────────────────────
         is_start_cmd = exec_cmd.lower().startswith('start ') or 'start-process' in exec_cmd.lower()
-        gui_apps = ['notepad', 'calc', 'setting', 'paint', 'mspaint', 'brave', 'chrome', 'edge', 'explorer', 'taskmgr', 'spotify', 'code', 'vscode']
+        gui_apps = ['notepad', 'calc', 'setting', 'paint', 'mspaint', 'brave', 'chrome', 'edge', 'explorer', 'taskmgr', 'spotify', 'code', 'vscode', 'valorant', 'riot', 'discord', 'vlc', 'excel', 'word']
         is_gui_target = any(app in exec_cmd.lower() for app in gui_apps) and not any(k in exec_cmd.lower() for k in ['taskkill', 'kill', 'get-process'])
 
         if is_start_cmd or is_gui_target:

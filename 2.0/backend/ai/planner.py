@@ -32,55 +32,8 @@ def resolve_app_launch_command(app_name: str) -> Dict[str, Any]:
             "shell_cmd": raw
         }
 
-    # Map aliases to standard Windows binaries / protocol URIs
-    app_map = {
-        "calculator": "calc",
-        "calculate": "calc",
-        "calc": "calc",
-        "notepad": "notepad",
-        "paint": "mspaint",
-        "mspaint": "mspaint",
-        "whatsapp": "whatsapp:",
-        "watsapp": "whatsapp:",
-        "whatsup": "whatsapp:",
-        "spotify": "spotify",
-        "taskmgr": "taskmgr",
-        "task manager": "taskmgr",
-        "explorer": "explorer",
-        "file explorer": "explorer",
-        "settings": "ms-settings:",
-        "control panel": "control",
-        "control": "control",
-        "vscode": "code",
-        "code": "code",
-        "terminal": "wt",
-        "powershell": "powershell",
-        "cmd": "cmd"
-    }
-
-    target = app_map.get(raw, raw)
-    
-    # Inside Ubuntu WSL2, Windows applications are launched via cmd.exe /c start or powershell.exe Start-Process
-    if target.endswith(":"):
-        shell_cmd = f"cmd.exe /c start {target} 2>/dev/null || powershell.exe -NoProfile -Command \"Start-Process '{target}'\" 2>/dev/null"
-    else:
-        shell_cmd = f"cmd.exe /c start {target} 2>/dev/null || cmd.exe /c start {target}: 2>/dev/null || powershell.exe -NoProfile -Command \"Start-Process '{target}'\" 2>/dev/null || {target}.exe 2>/dev/null"
-
-    display_name = target.replace(":", "").title()
-    if raw in ["calc", "calculator"]:
-        display_name = "Windows Calculator"
-    elif raw == "notepad":
-        display_name = "Notepad Text Editor"
-    elif raw in ["paint", "mspaint"]:
-        display_name = "Paint Application"
-    elif "whatsapp" in raw:
-        display_name = "WhatsApp Desktop"
-
-    return {
-        "title": display_name,
-        "display": target,
-        "shell_cmd": shell_cmd
-    }
+    from windows.apps import resolve_app_launch_command as win_resolve
+    return win_resolve(app_name)
 
 class ReActPlanner:
     def __init__(self):
@@ -399,13 +352,14 @@ Searched all local drives for **`{search_target}`** — no matching files found.
         
         display_title = launch_info["title"]
         shell_action = launch_info["shell_cmd"]
+        safe_shell_action = shell_action.replace('"', r'\"')
 
         ubuntu_cmd = (
             f'wsl.exe -d Ubuntu bash -c "'
             f'echo =================================================; '
             f'echo  KernelSense: Launching {display_title}; '
             f'echo =================================================; '
-            f'{shell_action}; '
+            f'{safe_shell_action}; '
             f'echo Launched {display_title} on desktop.; exec bash"'
         )
         proposed_commands = [{
