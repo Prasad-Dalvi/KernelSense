@@ -12,7 +12,6 @@ class ProcessEngine:
         self.ttl = ttl_seconds
         self._cached_procs: List[Dict[str, Any]] = []
         self._last_poll: float = 0.0
-        self._total_ram_gb: float = psutil.virtual_memory().total / (1024 ** 3)
 
     def list_processes(self, limit: int = 150) -> List[Dict[str, Any]]:
         """Fetches active processes with 2-second high-speed in-memory cache."""
@@ -21,34 +20,48 @@ class ProcessEngine:
             return self._cached_procs[:limit]
             
         procs = []
-        try:
-            # Minimalist attribute query avoiding Win32 QueryWorkingSet blocking
-            for p in psutil.process_iter(['pid', 'name', 'memory_percent', 'cpu_percent']):
-                try:
-                    info = p.info
-                    pid = info['pid']
-                    name = info.get('name') or f"proc_{pid}"
-                    is_idle = pid <= 4 or 'idle' in name.lower()
-                    mem_pct = round(info.get('memory_percent') or 0.0, 1)
-                    cpu_pct = 0.0 if is_idle else round(info.get('cpu_percent') or 0.0, 1)
-                    mem_mb = round((mem_pct / 100.0) * self._total_ram_gb * 1024, 1)
-                    
-                    procs.append({
-                        "pid": pid,
-                        "name": name,
-                        "cpu_percent": cpu_pct,
-                        "memory_percent": mem_pct,
-                        "user": "SYSTEM" if pid <= 4 else "user",
-                        "status": "running",
-                        "memory_mb": mem_mb,
-                        "is_system_idle": is_idle
-                    })
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        for p in psutil.process_iter(['pid', 'name', 'memory_info', 'memory_percent', 'cpu_percent', 'status']):
+            try:
+                info = p.info
+                pid = info.get('pid')
+                name = info.get('name')
+                if pid is None or not name:
                     continue
-        except Exception:
-            pass
+                is_idle = pid <= 4 or 'idle' in name.lower()
+                mem_pct = info.get('memory_percent')
+                cpu_pct = info.get('cpu_percent')
+                mem_info = info.get('memory_info')
+                mem_mb = (
+                    round(mem_info.rss / (1024 ** 2), 1)
+                    if mem_info is not None
+                    else None
+                )
+                try:
+                    user = p.username()
+                except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+                    user = None
 
-        procs.sort(key=lambda x: (not x['is_system_idle'], x['cpu_percent'], x['memory_percent']), reverse=True)
+                procs.append({
+                    "pid": pid,
+                    "name": name,
+                    "cpu_percent": round(cpu_pct, 1) if cpu_pct is not None else None,
+                    "memory_percent": round(mem_pct, 1) if mem_pct is not None else None,
+                    "user": user,
+                    "status": info.get('status'),
+                    "memory_mb": mem_mb,
+                    "is_system_idle": is_idle
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        procs.sort(
+            key=lambda x: (
+                not x['is_system_idle'],
+                x['cpu_percent'] or 0.0,
+                x['memory_percent'] or 0.0,
+            ),
+            reverse=True,
+        )
         self._cached_procs = procs
         self._last_poll = now
         return procs[:limit]

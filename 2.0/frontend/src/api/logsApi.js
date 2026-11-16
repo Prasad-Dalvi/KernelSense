@@ -1,14 +1,6 @@
-import { apiClient, isMockMode } from './client';
-import { getMockLogs } from '../mock/mockLogs';
+import { apiClient } from './client';
 
 export async function fetchLogs({ severity, service, search, limit = 200 } = {}) {
-  if (isMockMode()) {
-    let logs = getMockLogs();
-    if (severity) logs = logs.filter((l) => l.severity === severity);
-    if (service)  logs = logs.filter((l) => l.service?.toLowerCase().includes(service.toLowerCase()));
-    if (search)   logs = logs.filter((l) => l.message?.toLowerCase().includes(search.toLowerCase()));
-    return logs.slice(0, limit);
-  }
   const params = {};
   if (severity) params.severity = severity;
   if (service)  params.service  = service;
@@ -23,9 +15,9 @@ function normaliseLog(raw) {
   return {
     id:        raw.id        ?? raw._id       ?? Math.random().toString(36).slice(2),
     timestamp: raw.timestamp ?? raw.time      ?? '',
-    service:   raw.service   ?? raw.unit      ?? 'system',
+    service:   raw.service   ?? raw.unit      ?? null,
     message:   raw.message   ?? raw.msg       ?? '',
-    severity:  raw.severity  ?? raw.level     ?? 'info',
+    severity:  raw.severity  ?? raw.level     ?? 'unknown',
     pid:       raw.pid       ?? null,
   };
 }

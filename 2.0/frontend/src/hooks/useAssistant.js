@@ -8,7 +8,7 @@ export function useAssistant() {
   // Note: abort controller wiring reserved for when streaming AI responses are added
   const _abortRef = useRef(null);
 
-  const sendMessage = useCallback(async (query) => {
+  const sendMessage = useCallback(async (query, options = {}) => {
     if (!query.trim()) return;
 
     // Add user message immediately
@@ -25,7 +25,7 @@ export function useAssistant() {
     ]);
 
     try {
-      const response = await askAssistant(query);
+      const response = await askAssistant(query, options);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === aiPlaceholderId

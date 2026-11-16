@@ -1,82 +1,133 @@
-"""
-Live System Log Collector & NLP Intelligence Engine for KernelSense
-Collects system log entries and runs NLP inference to detect kernel errors and anomalies.
-"""
+"""Read real Windows Event Log entries and classify their message text."""
 
+import json
+import subprocess
 import time
-import uuid
-import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 from core.ml_inference import ml_engine
 
+
 class LogEngine:
-    def __init__(self):
+    def __init__(self, cache_seconds: float = 5.0, limit: int = 150):
+        self.cache_seconds = cache_seconds
+        self.limit = limit
         self.cached_logs: List[Dict[str, Any]] = []
-        self._init_live_log_buffer()
+        self._last_refresh: Optional[float] = None
 
-    def _init_live_log_buffer(self):
-        """Initializes realistic system log stream classified by the NLP model."""
-        base_time = datetime.datetime.now()
-        
-        sample_messages = [
-            ("systemd", "Reached target Graphical Interface.", 120),
-            ("NetworkManager", "enp3s0: IP4 address successfully configured to 192.168.1.105/24", 115),
-            ("systemd-timesyncd", "Synchronized to time server 162.159.200.123:123 (time.cloudflare.com).", 95),
-            ("CRON", "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts --report /etc/cron.daily ))", 80),
-            ("dockerd", "Container 4a82b9 started (image=postgres:16-alpine)", 65),
-            ("kernel", "usb 1-1.2: new high-speed USB device number 5 using xhci_hcd", 50),
-            ("sshd", "Accepted publickey for ubuntu from 192.168.1.50 port 54210 ssh2", 35),
-            ("kernel", "EXT4-fs (sda2): re-mounted. Opts: errors=remount-ro.", 20),
-            ("systemd-resolved", "Using degraded feature set (UDP) for DNS server 1.1.1.1", 10),
-            ("systemd", "Starting Daily apt download activities...", 5),
-        ]
-        
-        for service, msg, ago in sample_messages:
-            t = base_time - datetime.timedelta(seconds=ago)
-            nlp_result = ml_engine.predict_log(msg)
-            
-            self.cached_logs.append({
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": t.strftime("%H:%M:%S"),
-                "service": service,
-                "message": msg,
-                "severity": nlp_result["severity"],
-                "category": nlp_result["category"],
-                "confidence": nlp_result["confidence"],
-                "pid": 1000 + len(self.cached_logs)
+    def _read_windows_events(self) -> List[Dict[str, Any]]:
+        script = f"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try {{
+  $events = @(Get-WinEvent -LogName System,Application -MaxEvents {self.limit} -ErrorAction Stop)
+  $result = $events | Select-Object `
+    @{{Name='id';Expression={{"$($_.LogName)-$($_.RecordId)"}}}}, `
+    @{{Name='timestamp';Expression={{$_.TimeCreated.ToString('o')}}}}, `
+    @{{Name='service';Expression={{$_.ProviderName}}}}, `
+    @{{Name='message';Expression={{if ($_.Message) {{ $_.Message -replace '\\r?\\n',' ' }} else {{ '' }}}}}}, `
+    @{{Name='level';Expression={{$_.LevelDisplayName}}}}, `
+    @{{Name='level_number';Expression={{$_.Level}}}}, `
+    @{{Name='pid';Expression={{$_.ProcessId}}}}
+  if ($null -eq $result) {{ '[]' }} else {{ $result | ConvertTo-Json -Compress }}
+}} catch {{
+  if ($_.FullyQualifiedErrorId -like '*NoMatchingEventsFound*') {{
+    '[]'
+  }} else {{
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+  }}
+}}
+"""
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    script,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"Unable to read Windows Event Log: {exc}") from exc
+
+        if result.returncode != 0:
+            detail = result.stderr.strip() or "PowerShell returned an error."
+            raise RuntimeError(f"Unable to read Windows Event Log: {detail}")
+
+        try:
+            events = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Windows Event Log returned invalid JSON.") from exc
+
+        if events is None:
+            return []
+        if isinstance(events, dict):
+            events = [events]
+        if not isinstance(events, list):
+            raise RuntimeError("Windows Event Log returned an unexpected response.")
+
+        logs = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            message = str(event.get("message") or "").strip()
+            prediction = ml_engine.predict_log(message)
+            level = str(event.get("level") or "").lower()
+            level_number = event.get("level_number")
+            if "critical" in level or "error" in level or level_number in (1, 2):
+                severity = "critical"
+            elif "warning" in level or level_number == 3:
+                severity = "warning"
+            else:
+                severity = "info"
+            logs.append({
+                "id": str(event.get("id") or ""),
+                "timestamp": event.get("timestamp"),
+                "service": event.get("service"),
+                "message": message,
+                "severity": severity,
+                "category": prediction["category"],
+                "confidence": prediction["confidence"],
+                "pid": event.get("pid"),
             })
+        return logs
 
-    def get_logs(self, severity: Optional[str] = None, service: Optional[str] = None, search: Optional[str] = None, limit: int = 150) -> List[Dict[str, Any]]:
-        """Filters and returns classified system logs."""
-        logs = list(self.cached_logs)
-        
+    def get_logs(
+        self,
+        severity: Optional[str] = None,
+        service: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = 150,
+    ) -> List[Dict[str, Any]]:
+        """Returns filtered, recently collected events from Windows System and Application logs."""
+        if (
+            self._last_refresh is None
+            or time.monotonic() - self._last_refresh >= self.cache_seconds
+        ):
+            self.cached_logs = self._read_windows_events()
+            self._last_refresh = time.monotonic()
+
+        logs = self.cached_logs
         if severity:
-            logs = [l for l in logs if l['severity'].lower() == severity.lower()]
+            logs = [entry for entry in logs if entry["severity"].lower() == severity.lower()]
         if service:
-            logs = [l for l in logs if service.lower() in l['service'].lower()]
+            logs = [
+                entry for entry in logs
+                if service.lower() in (entry["service"] or "").lower()
+            ]
         if search:
-            logs = [l for l in logs if search.lower() in l['message'].lower()]
-            
+            logs = [entry for entry in logs if search.lower() in entry["message"].lower()]
         return logs[:limit]
 
-    def add_log_entry(self, service: str, message: str):
-        """Classifies and appends a new live log event."""
-        nlp_result = ml_engine.predict_log(message)
-        now_str = datetime.datetime.now().strftime("%H:%M:%S")
-        
-        entry = {
-            "id": str(uuid.uuid4())[:8],
-            "timestamp": now_str,
-            "service": service,
-            "message": message,
-            "severity": nlp_result["severity"],
-            "category": nlp_result["category"],
-            "confidence": nlp_result["confidence"],
-            "pid": None
-        }
-        self.cached_logs.insert(0, entry)
-        if len(self.cached_logs) > 500:
-            self.cached_logs.pop()
-        return entry
 
 log_engine = LogEngine()

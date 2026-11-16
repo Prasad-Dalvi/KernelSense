@@ -4,12 +4,12 @@ Orchestrates AI intent classification, multi-tool reasoning plans,
 Win32 desktop application launching, and ML telemetry diagnostics.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from ai.planner import planner
 
 class DiagnosticAgent:
-    def ask(self, query: str) -> Dict[str, Any]:
+    def ask(self, query: str, provider: str = "gemini", api_key: Optional[str] = None) -> Dict[str, Any]:
         """Routes user queries through the structured AI Planner & Tool pipeline."""
-        return planner.plan_and_execute(query)
+        return planner.plan_and_execute(query, provider=provider, api_key=api_key)
 
 ai_agent = DiagnosticAgent()

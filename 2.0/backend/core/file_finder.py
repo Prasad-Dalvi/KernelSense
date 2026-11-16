@@ -1,17 +1,17 @@
 """
 Universal High-Speed Local File & Document Discovery Engine for KernelSense
 Features:
-- Instant Sub-Millisecond (<10ms) Priority Scanning in Downloads, Desktop, Documents
-- Hard Time-Budgeted (<0.4s) Bounded Multi-Drive Discovery
+- Sub-Millisecond Priority Scanning in Downloads, Desktop, Documents, Notes
+- Recursive Multi-Depth (Depth 4) Discovery with Fast Pruning
+- Score-Based Filename Ranking (Exact Match First)
+- Robust Natural Language Filename Matching (e.g. 'open Java-Notes.pdf file', 'find USS1.pdf')
 - In-Memory Path Caching to prevent redundant disk IO
-- Robust Natural Language Filename Matching (e.g. 'USS1.pdf', 'JCL1.pdf', 'sanjay patil.pdf')
 """
 
 import os
-import glob
+import re
 import time
 import platform
-import subprocess
 from typing import List, Dict, Any, Optional
 
 class FileFinderEngine:
@@ -20,91 +20,115 @@ class FileFinderEngine:
         self.user_home = os.path.expanduser("~")
         self._cache: Dict[str, List[Dict[str, Any]]] = {}
         
-        # Priority scan folders where 99% of user documents reside
+        # Priority scan folders where user documents reside
         self.fast_folders = [
-            "d:\\Downloads",
             "d:\\Desktop",
+            "d:\\Downloads",
             "d:\\Documents",
+            "d:\\Desktop\\NOTES",
             "d:\\Desktop\\KernalSense",
-            os.path.join(self.user_home, "Downloads"),
             os.path.join(self.user_home, "Desktop"),
+            os.path.join(self.user_home, "Downloads"),
             os.path.join(self.user_home, "Documents"),
             os.path.join(self.user_home, "Pictures")
         ]
         self.valid_fast_folders = [f for f in self.fast_folders if os.path.exists(f)]
 
-    def search_files(self, filename_or_query: str, max_results: int = 8, time_limit_sec: float = 0.4) -> List[Dict[str, Any]]:
+    def clean_target(self, query: str) -> str:
+        clean = query.strip()
+        # Check if query has an explicit file extension: e.g. Java-Notes.pdf, notes.txt
+        ext_match = re.search(r'\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|json|log|py|java|cpp|c|html|css|js)\b', clean, re.I)
+        if ext_match:
+            candidate = clean[:ext_match.end()].strip()
+            clean = re.sub(r'^(open|find|search\s+for|search|locate|view|show|read|cat|run)\s+', '', candidate, flags=re.I).strip()
+            return clean
+
+        clean = re.sub(r'^(open|find|search\s+for|search|locate|view|show|read|cat|run)\s+', '', clean, flags=re.I).strip()
+        clean = re.sub(r'\s+(file|document|doc)$', '', clean, flags=re.I).strip()
+        return clean
+
+    def search_files(self, filename_or_query: str, max_results: int = 8, time_limit_sec: float = 0.8) -> List[Dict[str, Any]]:
         """
         Performs ultra-fast breadth-first discovery bounded by a strict hard time limit.
         """
-        query_clean = filename_or_query.strip().lower()
-        # Clean leading artifacts
-        for prefix in ["for ", "the ", "my ", "file ", "doc ", "document ", "read ", "open ", "find ", "search "]:
-            if query_clean.startswith(prefix):
-                query_clean = query_clean[len(prefix):].strip()
-
-        if not query_clean:
+        target = self.clean_target(filename_or_query)
+        if not target:
             return []
 
-        # Check in-memory cache first
-        if query_clean in self._cache:
-            return self._cache[query_clean]
+        target_lower = target.lower()
+        if target_lower in self._cache:
+            return self._cache[target_lower]
+
+        target_stem = os.path.splitext(target_lower)[0]
+        ext_filter = os.path.splitext(target_lower)[1] if '.' in target_lower else None
+        tokens = [t for t in re.split(r'[\s._\-]+', target_stem) if len(t) >= 2]
 
         start_time = time.time()
         results = []
-        seen_paths = set()
+        seen = set()
 
-        # Split query terms for multi-word fuzzy matching (e.g. "sanjay patil")
-        query_tokens = [t for t in query_clean.replace(".", " ").split() if len(t) >= 2]
-        ext_filter = None
-        if "." in query_clean:
-            parts = query_clean.split(".")
-            if len(parts[-1]) in [2, 3, 4, 5]:
-                ext_filter = f".{parts[-1]}".lower()
-
-        # ── 1. Priority Fast Scan (<10ms across Downloads & Desktop) ──────────
+        # ── 1. Priority Fast Scan across fast folders (recursive up to depth 4) ──
         for folder in self.valid_fast_folders:
             if time.time() - start_time > time_limit_sec or len(results) >= max_results:
                 break
-            try:
-                for entry in os.scandir(folder):
-                    if entry.is_file():
-                        name_lower = entry.name.lower()
-                        match = False
-                        
-                        if query_clean in name_lower:
+            for dirpath, dirnames, filenames in os.walk(folder):
+                if time.time() - start_time > time_limit_sec or len(results) >= max_results:
+                    break
+                rel = os.path.relpath(dirpath, folder)
+                if rel != '.' and rel.count(os.sep) >= 4:
+                    dirnames.clear()
+                    continue
+                # Skip build, cache, and hidden directories
+                dirnames[:] = [d for d in dirnames if not d.startswith('.') and d.lower() not in [
+                    'node_modules', '__pycache__', 'dist', 'build', '.git', '$recycle.bin', 'appdata', 'system volume information'
+                ]]
+                for f in filenames:
+                    f_lower = f.lower()
+                    match = False
+                    score = 100
+
+                    if f_lower == target_lower:
+                        match = True
+                        score = 0   # Exact match
+                    elif target_lower in f_lower:
+                        match = True
+                        score = 10
+                    elif target_stem and target_stem in f_lower:
+                        if ext_filter and f_lower.endswith(ext_filter):
                             match = True
-                        elif query_tokens and all(token in name_lower for token in query_tokens):
+                            score = 15
+                        elif not ext_filter:
                             match = True
-                        elif ext_filter and name_lower.endswith(ext_filter):
-                            stem = query_clean.replace(ext_filter, "").strip()
-                            if not stem or stem in name_lower:
-                                match = True
-                                
-                        if match and entry.path not in seen_paths:
-                            seen_paths.add(entry.path)
+                            score = 20
+                    elif tokens and all(t in f_lower for t in tokens):
+                        if ext_filter and f_lower.endswith(ext_filter):
+                            match = True
+                            score = 25
+                        elif not ext_filter:
+                            match = True
+                            score = 30
+
+                    if match:
+                        full = os.path.join(dirpath, f)
+                        if full not in seen:
+                            seen.add(full)
                             try:
-                                st = entry.stat()
+                                st = os.stat(full)
                                 size_mb = round(st.st_size / (1024 * 1024), 2)
                                 size_human = f"{size_mb} MB" if size_mb >= 0.1 else f"{round(st.st_size / 1024, 1)} KB"
                                 mod_time = time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))
                             except Exception:
                                 size_human = "N/A"
                                 mod_time = "N/A"
-                                
-                            ext = os.path.splitext(entry.name)[1].lower()
                             results.append({
-                                "filename": entry.name,
-                                "path": entry.path,
-                                "extension": ext,
+                                "filename": f,
+                                "path": full,
+                                "extension": os.path.splitext(f)[1].lower(),
                                 "size": size_human,
                                 "modified": mod_time,
-                                "is_dir": False
+                                "is_dir": False,
+                                "score": score
                             })
-                            if len(results) >= max_results:
-                                break
-            except Exception:
-                continue
 
         # ── 2. Secondary Bounded Scan (if not found in fast folders) ──────────
         if not results:
@@ -114,51 +138,63 @@ class FileFinderEngine:
                     break
                 if not os.path.exists(root):
                     continue
-                try:
-                    for entry in os.scandir(root):
-                        if time.time() - start_time > time_limit_sec or len(results) >= max_results:
-                            break
-                        if entry.is_dir() and not entry.name.startswith('$') and entry.name.lower() not in [
-                            'node_modules', '$recycle.bin', 'system volume information', 'appdata', 
-                            'windows', 'program files', 'program files (x86)', 'site-packages', 
-                            '__pycache__', 'dist', 'build', '.git', '.cache'
-                        ]:
-                            # Scan 1 level deep inside each top folder
-                            try:
-                                for sub in os.scandir(entry.path):
-                                    if sub.is_file():
-                                        n_lower = sub.name.lower()
-                                        if query_clean in n_lower or (query_tokens and all(t in n_lower for t in query_tokens)):
-                                            if sub.path not in seen_paths:
-                                                seen_paths.add(sub.path)
-                                                try:
-                                                    st = sub.stat()
-                                                    size_mb = round(st.st_size / (1024 * 1024), 2)
-                                                    size_human = f"{size_mb} MB" if size_mb >= 0.1 else f"{round(st.st_size / 1024, 1)} KB"
-                                                    mod_time = time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))
-                                                except Exception:
-                                                    size_human = "N/A"
-                                                    mod_time = "N/A"
-                                                results.append({
-                                                    "filename": sub.name,
-                                                    "path": sub.path,
-                                                    "extension": os.path.splitext(sub.name)[1].lower(),
-                                                    "size": size_human,
-                                                    "modified": mod_time,
-                                                    "is_dir": False
-                                                })
-                                                if len(results) >= max_results:
-                                                    break
-                            except Exception:
-                                continue
-                except Exception:
-                    continue
+                for dirpath, dirnames, filenames in os.walk(root):
+                    if time.time() - start_time > time_limit_sec or len(results) >= max_results:
+                        break
+                    rel = os.path.relpath(dirpath, root)
+                    if rel != '.' and rel.count(os.sep) >= 2:
+                        dirnames.clear()
+                        continue
+                    dirnames[:] = [d for d in dirnames if not d.startswith('.') and d.lower() not in [
+                        'node_modules', '$recycle.bin', 'system volume information', 'appdata', 
+                        'windows', 'program files', 'program files (x86)', 'site-packages', 
+                        '__pycache__', 'dist', 'build', '.git', '.cache'
+                    ]]
+                    for f in filenames:
+                        f_lower = f.lower()
+                        match = False
+                        score = 100
+                        if f_lower == target_lower:
+                            match = True
+                            score = 0
+                        elif target_lower in f_lower:
+                            match = True
+                            score = 10
+                        elif tokens and all(t in f_lower for t in tokens):
+                            match = True
+                            score = 30
+                        if match:
+                            full = os.path.join(dirpath, f)
+                            if full not in seen:
+                                seen.add(full)
+                                try:
+                                    st = os.stat(full)
+                                    size_mb = round(st.st_size / (1024 * 1024), 2)
+                                    size_human = f"{size_mb} MB" if size_mb >= 0.1 else f"{round(st.st_size / 1024, 1)} KB"
+                                    mod_time = time.strftime('%Y-%m-%d %H:%M', time.localtime(st.st_mtime))
+                                except Exception:
+                                    size_human = "N/A"
+                                    mod_time = "N/A"
+                                results.append({
+                                    "filename": f,
+                                    "path": full,
+                                    "extension": os.path.splitext(f)[1].lower(),
+                                    "size": size_human,
+                                    "modified": mod_time,
+                                    "is_dir": False,
+                                    "score": score
+                                })
 
-        # Cache results
-        if results:
-            self._cache[query_clean] = results
+        # Sort by score (exact match first)
+        results.sort(key=lambda x: (x["score"], len(x["filename"])))
+        for r in results:
+            del r["score"]
 
-        return results
+        final_res = results[:max_results]
+        if final_res:
+            self._cache[target_lower] = final_res
+
+        return final_res
 
     def format_open_command(self, file_path: str) -> Dict[str, Any]:
         """
@@ -167,7 +203,14 @@ class FileFinderEngine:
         norm_path = file_path.replace("/", "\\")
         filename = os.path.basename(norm_path)
         
-        ubuntu_cmd = f'wsl.exe -d Ubuntu bash -c "echo =================================================; echo  KernelSense: Launching Local File: {filename}; echo  Path: {norm_path}; echo =================================================; cmd.exe /c start \\"\\" \\"{norm_path}\\"; exec bash"'
+        ubuntu_cmd = (
+            f'wsl.exe -d Ubuntu bash -c "'
+            f'echo =================================================; '
+            f'echo  KernelSense: Launching Local File: {filename}; '
+            f'echo  Path: {norm_path}; '
+            f'echo =================================================; '
+            f'cmd.exe /c start \\"\\" \\"{norm_path}\\"; exec bash"'
+        )
         
         return {
             "command": ubuntu_cmd,

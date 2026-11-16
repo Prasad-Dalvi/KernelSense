@@ -1,8 +1,6 @@
-import { apiClient, isMockMode } from './client';
-import { getMockSystem } from '../mock/mockSystem';
+import { apiClient } from './client';
 
 export async function fetchSystemStats() {
-  if (isMockMode()) return getMockSystem();
   try {
     const { data } = await apiClient.get('/system/stats');
     if (data && data.cpu && data.memory) {
@@ -24,11 +22,12 @@ export async function fetchSystemStats() {
   });
 }
 
-export async function fetchCpu()     { if (isMockMode()) return getMockSystem().cpu;     const { data } = await apiClient.get('/system/cpu');     return normaliseCpu(data); }
-export async function fetchMemory()  { if (isMockMode()) return getMockSystem().memory;  const { data } = await apiClient.get('/system/memory');  return normaliseMemory(data); }
-export async function fetchStorage() { if (isMockMode()) return getMockSystem().storage; const { data } = await apiClient.get('/system/storage'); return normaliseStorage(data); }
-export async function fetchNetwork() { if (isMockMode()) return getMockSystem().network; const { data } = await apiClient.get('/system/network'); return normaliseNetwork(data); }
-export async function fetchHealth()  { if (isMockMode()) return getMockSystem().health;  const { data } = await apiClient.get('/system/health');  return normaliseHealth(data); }
+export async function fetchCpu()     { const { data } = await apiClient.get('/system/cpu');     return normaliseCpu(data); }
+export async function fetchMemory()  { const { data } = await apiClient.get('/system/memory');  return normaliseMemory(data); }
+export async function fetchStorage() { const { data } = await apiClient.get('/system/storage'); return normaliseStorage(data); }
+export async function fetchNetwork() { const { data } = await apiClient.get('/system/network'); return normaliseNetwork(data); }
+export async function fetchHealth()  { const { data } = await apiClient.get('/system/health');  return normaliseHealth(data); }
+export async function fetchHostInfo() { const { data } = await apiClient.get('/system/info'); return data; }
 
 // ─── Normalisers ─────────────────────────────────────────────────────────────
 function normaliseSystemStats(raw) {
@@ -41,65 +40,65 @@ function normaliseSystemStats(raw) {
   };
 }
 
-function normaliseHistory(rawHistory, currentVal = 0) {
+function normaliseHistory(rawHistory) {
   if (Array.isArray(rawHistory) && rawHistory.length > 0) {
-    return rawHistory.map((item, idx) => {
-      if (typeof item === 'number') {
-        return { time: `${idx}`, value: Number(item) || 0 };
+    return rawHistory.flatMap((item, idx) => {
+      if (typeof item === 'number' && Number.isFinite(item)) {
+        return [{ time: `${idx}`, value: item }];
       }
       if (typeof item === 'object' && item !== null) {
-        const val = typeof item.value === 'number' ? item.value : (Number(item.usage) || Number(item.val) || currentVal);
-        return { time: item.time ?? `${idx}`, value: val };
+        const val = item.value ?? item.usage ?? item.val;
+        if (typeof val === 'number' && Number.isFinite(val)) {
+          return [{ time: item.time ?? `${idx}`, value: val }];
+        }
       }
-      return { time: `${idx}`, value: currentVal };
+      return [];
     });
   }
-  return Array.from({ length: 15 }, (_, i) => ({
-    time: `${i}`,
-    value: currentVal,
-  }));
+  return [];
 }
 
 function normaliseCpu(raw) {
-  const usage = raw?.cpu_usage ?? raw?.usage ?? 0;
+  const usage = raw?.cpu_usage ?? raw?.usage ?? null;
   return {
     usage,
-    cores:       raw?.cpu_count       ?? raw?.cores       ?? 0,
-    load_avg:    raw?.load_avg        ?? [],
+    cores:       raw?.cpu_count       ?? raw?.cores       ?? null,
+    load_avg:    raw?.load_avg        ?? null,
     temperature: raw?.temperature     ?? null,
-    history:     normaliseHistory(raw?.history, usage),
+    history:     normaliseHistory(raw?.history),
   };
 }
 
 function normaliseMemory(raw) {
-  const usage = raw?.memory_percent ?? raw?.usage ?? 0;
+  const usage = raw?.memory_percent ?? raw?.usage ?? null;
   return {
     usage,
-    total_gb:  raw?.total_gb      ?? raw?.total      ?? 0,
-    used_gb:   raw?.used_gb       ?? raw?.used       ?? 0,
-    free_gb:   raw?.free_gb       ?? raw?.free       ?? 0,
-    swap_used: raw?.swap_percent  ?? raw?.swap_used  ?? 0,
-    history:   normaliseHistory(raw?.history, usage),
+    total_gb:      raw?.total_gb      ?? raw?.total      ?? null,
+    used_gb:       raw?.used_gb       ?? raw?.used       ?? null,
+    free_gb:       raw?.free_gb       ?? raw?.free       ?? null,
+    swap_used:     raw?.swap_used_gb  ?? null,
+    swap_total:    raw?.swap_total_gb ?? null,
+    swap_percent:  raw?.swap_percent  ?? null,
+    history:       normaliseHistory(raw?.history),
   };
 }
 
 function normaliseStorage(raw) {
   return {
-    usage:         raw?.usage_percent ?? raw?.usage         ?? 0,
-    total_gb:      raw?.total         ?? raw?.total_gb      ?? 0,
-    used_gb:       raw?.used          ?? raw?.used_gb       ?? 0,
-    available_gb:  raw?.available     ?? raw?.available_gb  ?? 0,
-    largest_dirs:  raw?.largest_dirs  ?? [],
-    large_files:   raw?.large_files   ?? [],
+    usage:           raw?.usage_percent ?? raw?.usage         ?? null,
+    total_gb:        raw?.total         ?? raw?.total_gb      ?? null,
+    used_gb:         raw?.used          ?? raw?.used_gb       ?? null,
+    available_gb:    raw?.available     ?? raw?.available_gb  ?? null,
+    partitions:      raw?.partitions    ?? [],
     recommendations: raw?.recommendations ?? [],
   };
 }
 
 function normaliseNetwork(raw) {
-  if (Array.isArray(raw)) return { interfaces: raw.map(normaliseInterface), internet: true };
+  if (Array.isArray(raw)) return { interfaces: raw.map(normaliseInterface), internet: null };
   return {
     interfaces: (raw?.interfaces ?? []).map(normaliseInterface),
-    internet:   raw?.internet ?? raw?.internet_available ?? false,
+    internet:   raw?.internet ?? raw?.internet_available ?? null,
     download_mbps: raw?.download_mbps ?? null,
     upload_mbps:   raw?.upload_mbps   ?? null,
   };
@@ -107,19 +106,19 @@ function normaliseNetwork(raw) {
 
 function normaliseInterface(iface) {
   return {
-    name:    iface?.name       ?? iface?.interface ?? 'unknown',
-    status:  iface?.status     ?? (iface?.is_up ? 'up' : 'down'),
+    name:    iface?.name       ?? iface?.interface ?? null,
+    status:  iface?.status     ?? (typeof iface?.is_up === 'boolean' ? (iface.is_up ? 'up' : 'down') : null),
     ip:      iface?.ip_address ?? iface?.ip ?? null,
-    type:    iface?.type       ?? 'ethernet',
+    type:    iface?.type       ?? null,
   };
 }
 
 function normaliseHealth(raw) {
   return {
-    score:       raw?.score ?? raw?.overall_score ?? 0,
+    score:       raw?.score ?? raw?.overall_score ?? null,
     categories:  (raw?.categories ?? []).map((c) => ({
       name:           c.name            ?? '',
-      score:          c.score           ?? 0,
+      score:          c.score           ?? null,
       status:         c.status          ?? 'unknown',
       explanation:    c.explanation     ?? c.reason ?? '',
       recommendation: c.recommendation  ?? '',

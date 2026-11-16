@@ -6,9 +6,8 @@ No hardcoded intents, no hardcoded URLs, no hardcoded commands.
 """
 
 import os
+import re
 import uuid
-import psutil
-import platform
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 
@@ -20,6 +19,14 @@ from ai.llm_provider import llm_gateway
 from core.file_finder import file_finder
 from core.process_engine import process_engine
 from core.database import db
+from core.live_telemetry import telemetry_collector
+
+
+def format_metric(value: Any, digits: int = 1, suffix: str = "") -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.{digits}f}{suffix}"
+    return "Unavailable"
+
 
 def resolve_app_launch_command(app_name: str) -> Dict[str, Any]:
     raw = app_name.strip().lower().replace(".exe", "")
@@ -36,49 +43,61 @@ def resolve_app_launch_command(app_name: str) -> Dict[str, Any]:
     return win_resolve(app_name)
 
 class ReActPlanner:
-    def __init__(self):
-        self.is_windows = platform.system() == "Windows"
-
     # ──────────────────────────────────────────────────────────────────
     # Live hardware telemetry snapshot (injected into every Gemini query)
     # ──────────────────────────────────────────────────────────────────
     def _build_telemetry_context(self) -> Dict[str, Any]:
-        try:
-            mem  = psutil.virtual_memory()
-            swap = psutil.swap_memory()
-            cpu  = psutil.cpu_percent(interval=None)
-            disk = psutil.disk_usage("C:\\" if os.path.exists("C:\\") else "/")
-            top_mem = process_engine.get_top_memory_processes(limit=5)
-            top_cpu = process_engine.get_top_cpu_processes(limit=5)
-            return {
-                "system_health_score": round(max(10, 100 - (cpu * 0.4 + mem.percent * 0.4))),
-                "cpu_usage_percent": round(cpu, 1),
-                "cpu_cores": psutil.cpu_count(logical=True) or 1,
-                "memory_used_gb":   round(mem.used  / 1024**3, 2),
-                "memory_total_gb":  round(mem.total / 1024**3, 2),
-                "memory_percent":   round(mem.percent, 1),
-                "swap_percent":     round(swap.percent, 1),
-                "disk_used_gb":     round(disk.used  / 1024**3, 1),
-                "disk_total_gb":    round(disk.total / 1024**3, 1),
-                "disk_usage_percent": round(disk.percent, 1),
-                "top_memory_processes": [
-                    {"name": p.get("name"), "pid": p.get("pid"),
-                     "ram_mb": p.get("memory_mb"), "ram_pct": p.get("memory_percent")}
-                    for p in top_mem
-                ],
-                "top_cpu_processes": [
-                    {"name": p.get("name"), "pid": p.get("pid"),
-                     "cpu_pct": p.get("cpu_percent"), "ram_mb": p.get("memory_mb")}
-                    for p in top_cpu
-                ],
-            }
-        except Exception:
-            return {}
+        stats = telemetry_collector.get_all_stats()
+        host = telemetry_collector.get_host_info()
+        mem = stats["memory"]
+        disk = stats["storage"]
+        return {
+            "host": {
+                key: host.get(key)
+                for key in (
+                    "os_name",
+                    "os_release",
+                    "os_version",
+                    "processor",
+                    "logical_cores",
+                    "physical_cores",
+                    "cpu_frequency_mhz",
+                )
+            },
+            "system_health_score": stats["health"]["score"],
+            "cpu_usage_percent": stats["cpu"]["cpu_usage"],
+            "cpu_cores": stats["cpu"]["cpu_count"],
+            "memory_used_gb": mem["used_gb"],
+            "memory_total_gb": mem["total_gb"],
+            "memory_percent": mem["memory_percent"],
+            "swap_percent": mem["swap_percent"],
+            "swap_used_gb": mem["swap_used_gb"],
+            "swap_total_gb": mem["swap_total_gb"],
+            "disk_used_gb": disk["used_gb"],
+            "disk_total_gb": disk["total_gb"],
+            "disk_usage_percent": disk["usage_percent"],
+            "internet_available": stats["network"]["internet_available"],
+            "top_memory_processes": [
+                {"name": p.get("name"), "pid": p.get("pid"),
+                 "ram_mb": p.get("memory_mb"), "ram_pct": p.get("memory_percent")}
+                for p in process_engine.get_top_memory_processes(limit=5)
+            ],
+            "top_cpu_processes": [
+                {"name": p.get("name"), "pid": p.get("pid"),
+                 "cpu_pct": p.get("cpu_percent"), "ram_mb": p.get("memory_mb")}
+                for p in process_engine.get_top_cpu_processes(limit=5)
+            ],
+        }
 
     # ──────────────────────────────────────────────────────────────────
     # Main entry point: every query flows through Gemini
     # ──────────────────────────────────────────────────────────────────
-    def plan_and_execute(self, query: str) -> Dict[str, Any]:
+    def plan_and_execute(
+        self,
+        query: str,
+        provider: str = "gemini",
+        api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         1. Collect live telemetry
         2. Send query + telemetry to Gemini (primary) or fallback LLMs
@@ -87,12 +106,16 @@ class ReActPlanner:
         """
         telemetry_ctx = self._build_telemetry_context()
 
-        # Send everything to Gemini
-        ai_result = llm_gateway.reason_and_plan(query, telemetry_ctx)
+        # Try the selected cloud provider and its configured fallbacks.
+        ai_result = llm_gateway.reason_and_plan(query, telemetry_ctx, provider, api_key)
 
         if not ai_result:
-            # Hard fallback: Gemini offline and no other provider available
-            return self._offline_fallback(query, telemetry_ctx)
+            # Deterministic local fallback if AI gateway is temporarily unavailable
+            ai_result = self._local_rule_planner(query, telemetry_ctx)
+
+        if not ai_result:
+            # Hard fallback: no cloud or local model provider is available.
+            return self._offline_fallback(query, telemetry_ctx, provider)
 
         intent      = ai_result.get("intent", "GENERAL_QUERY")
         action_type = ai_result.get("action_type", "NONE")
@@ -128,21 +151,27 @@ class ReActPlanner:
     def _format_greeting(self, ai_result: Dict, telemetry: Dict, provider: str) -> Dict:
         response_md = ai_result.get("response_markdown", "")
         if not response_md:
-            cpu = telemetry.get("cpu_usage_percent", 0)
-            ram = telemetry.get("memory_percent", 0)
-            health = telemetry.get("system_health_score", 95)
+            cpu = format_metric(telemetry.get("cpu_usage_percent"), suffix="%")
+            ram = format_metric(telemetry.get("memory_percent"), suffix="%")
+            health_value = telemetry.get("system_health_score")
+            health = (
+                f"{health_value}/100"
+                if isinstance(health_value, (int, float))
+                else "Unavailable"
+            )
+            host = telemetry.get("host", {}).get("os_name", "Unavailable")
             response_md = f"""### 👋 Hello! I am KernelSense AI
 
-I am your **AI-Powered Operating System & Autonomous Telemetry Assistant** powered by **{provider}**.
+I am your system assistant, powered by **{provider}**. Detected host: **{host}**.
 
 ---
 
 #### 🛠️ What I Can Do:
-1. **🐧 Core Linux & OS Commands:** *"find my ip address"*, *"what is my username"*, *"show open ports"*, *"lscpu"*
-2. **🧠 Hardware Telemetry:** Current Health: `{health}/100` | RAM: `{ram:.1f}%` | CPU: `{cpu:.1f}%`
-3. **📁 Local File Search:** *"find JCL1.pdf"*, *"open USS1.pdf"*, *"search for resume.docx"*
-4. **🌐 Web & Apps:** *"open youtube on chrome"*, *"open spotify on brave"*, *"open notepad"*
-5. **🤖 AI Chat:** Ask me anything — coding, explanations, math, system diagnostics
+1. **Host information:** Ask about the detected operating system and live metrics.
+2. **Hardware telemetry:** Health: `{health}` | RAM: `{ram}` | CPU: `{cpu}`
+3. **Local file search:** Ask me to find a file by its name.
+4. **Web and apps:** Ask to open a website or an installed application.
+5. **AI chat:** Ask for explanations or system diagnostics.
 
 *Type any query to begin!*
 """
@@ -159,9 +188,7 @@ I am your **AI-Powered Operating System & Autonomous Telemetry Assistant** power
             },
             "commands": [],
             "recommendations": ai_result.get("recommendations", [
-                "Try: 'finding the ip address of this pc'",
-                "Try: 'find JCL1.pdf' to locate local documents",
-                "Try: 'why is my laptop slow' for system diagnosis"
+                "Ask about the detected host or current system metrics."
             ])
         }
 
@@ -171,6 +198,8 @@ I am your **AI-Powered Operating System & Autonomous Telemetry Assistant** power
     def _handle_file_search(self, ai_result: Dict, query: str) -> Dict:
         search_target = ai_result.get("search_target") or query
         files = file_finder.search_files(search_target, max_results=6)
+        if not files and search_target != query:
+            files = file_finder.search_files(query, max_results=6)
 
         proposed_commands = []
         if files:
@@ -411,10 +440,12 @@ Searched all local drives for **`{search_target}`** — no matching files found.
                     "explanation": pc.get("explanation", "")
                 })
 
+        health = telemetry.get("system_health_score")
+        health_label = f"{health}%" if isinstance(health, (int, float)) else "unavailable"
         root_nodes = ai_result.get("root_cause_nodes") or [
             {"id": "q",  "label": f"Query: {query[:30]}", "type": "process"},
             {"id": "ai", "label": f"Gemini AI ({provider})", "type": "system"},
-            {"id": "hw", "label": f"Health: {telemetry.get('system_health_score', 95)}%", "type": "impact"}
+            {"id": "hw", "label": f"Health: {health_label}", "type": "impact"}
         ]
         root_edges = ai_result.get("root_cause_edges") or [
             {"from": "q", "to": "ai"}, {"from": "ai", "to": "hw"}
@@ -435,39 +466,160 @@ Searched all local drives for **`{search_target}`** — no matching files found.
         }
 
     # ──────────────────────────────────────────────────────────────────
+    # Local Rule-Based Planner (Bulletproof fallback when AI is unreachable)
+    # ──────────────────────────────────────────────────────────────────
+    def _local_rule_planner(self, query: str, telemetry: Dict) -> Optional[Dict[str, Any]]:
+        q = query.strip().lower()
+
+        # 1. Greeting
+        if q in {"hi", "hello", "hey", "who are you", "what can you do", "help"}:
+            return {
+                "intent": "GREETING",
+                "action_type": "CHAT",
+                "provider": "local_offline_engine",
+                "response_markdown": ""
+            }
+
+        # 2. File search / open
+        has_ext = bool(re.search(r'\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|json|log|py|java|cpp|c|html|css|js)\b', q, re.I))
+        is_file_kw = any(q.startswith(p) for p in ["find ", "search ", "locate "]) or "file" in q or "notes" in q or "pdf" in q
+        if has_ext or (is_file_kw and not q.startswith("open chrome") and not q.startswith("open brave")):
+            target = file_finder.clean_target(query)
+            return {
+                "intent": "FILE_SEARCH",
+                "action_type": "FILE_OPEN",
+                "search_target": target,
+                "provider": "local_offline_engine"
+            }
+
+        # 3. Open URL in Browser
+        if any(site in q for site in ["youtube", "google", "github", "reddit", "netflix", "stackoverflow", "twitter", "x.com", "instagram", "facebook", "wikipedia"]) or "http" in q or ".com" in q:
+            browser = "chrome"
+            for b in ["brave", "edge", "firefox", "chrome"]:
+                if b in q:
+                    browser = b
+                    break
+            url = None
+            if "youtube" in q:
+                url = "https://www.youtube.com"
+            elif "google" in q:
+                url = "https://www.google.com"
+            elif "github" in q:
+                url = "https://github.com"
+            elif "reddit" in q:
+                url = "https://reddit.com"
+            elif "netflix" in q:
+                url = "https://www.netflix.com"
+            else:
+                url = f"https://{q.split()[-1]}"
+            return {
+                "intent": "OPEN_URL_IN_APP",
+                "action_type": "OPEN_URL",
+                "target_url": url,
+                "browser": browser,
+                "provider": "local_offline_engine"
+            }
+
+        # 4. Open Desktop Application
+        if any(q.startswith(p) for p in ["open ", "launch ", "start ", "run "]):
+            app_raw = re.sub(r'^(open|launch|start|run)\s+', '', q).strip()
+            from windows.apps import app_registry
+            found_app = app_registry.find_app(app_raw)
+            if found_app or app_raw in {"notepad", "calculator", "calc", "cmd", "terminal", "taskmgr", "paint", "explorer"}:
+                return {
+                    "intent": "OPEN_APPLICATION",
+                    "action_type": "OPEN_APP",
+                    "target_app": app_raw,
+                    "provider": "local_offline_engine"
+                }
+
+        # 5. Linux Core Command (IP address, whoami, ports, cpu info, disk)
+        if any(k in q for k in ["ip address", "my ip", "ipconfig", "what is my ip"]):
+            return {
+                "intent": "LINUX_CORE_COMMAND",
+                "action_type": "LINUX_SHELL",
+                "linux_task_type": "IP_ADDRESS",
+                "linux_command": "hostname -I; ip -br a",
+                "linux_title": "🌐 Comprehensive Windows Host & Ubuntu WSL2 IP Discovery",
+                "provider": "local_offline_engine"
+            }
+        if any(k in q for k in ["whoami", "my username", "current user"]):
+            return {
+                "intent": "LINUX_CORE_COMMAND",
+                "action_type": "LINUX_SHELL",
+                "linux_task_type": "USER_IDENTITY",
+                "linux_command": "whoami; id; w",
+                "linux_title": "👤 Linux User Identity & Active Sessions",
+                "provider": "local_offline_engine"
+            }
+        if any(k in q for k in ["open ports", "listening ports", "active ports"]):
+            return {
+                "intent": "LINUX_CORE_COMMAND",
+                "action_type": "LINUX_SHELL",
+                "linux_task_type": "OPEN_PORTS",
+                "linux_command": "ss -tulnp",
+                "linux_title": "🔌 Active Listening Network Ports",
+                "provider": "local_offline_engine"
+            }
+        if any(k in q for k in ["lscpu", "cpu info", "processor info"]):
+            return {
+                "intent": "LINUX_CORE_COMMAND",
+                "action_type": "LINUX_SHELL",
+                "linux_task_type": "CPU_INFO",
+                "linux_command": "lscpu",
+                "linux_title": "⚡ CPU Architecture & Core Details",
+                "provider": "local_offline_engine"
+            }
+        if any(k in q for k in ["current directory", "pwd", "working directory"]):
+            return {
+                "intent": "LINUX_CORE_COMMAND",
+                "action_type": "LINUX_SHELL",
+                "linux_task_type": "DIR_LIST",
+                "linux_command": "pwd; ls -la",
+                "linux_title": "📂 Working Directory & Files",
+                "provider": "local_offline_engine"
+            }
+
+        return None
+
+    # ──────────────────────────────────────────────────────────────────
     # Hard offline fallback (all providers unreachable)
     # ──────────────────────────────────────────────────────────────────
-    def _offline_fallback(self, query: str, telemetry: Dict) -> Dict:
-        mem  = telemetry.get("memory_percent", 0)
-        cpu  = telemetry.get("cpu_usage_percent", 0)
-        health = telemetry.get("system_health_score", 95)
+    def _offline_fallback(self, query: str, telemetry: Dict, provider: str = "gemini") -> Dict:
+        mem = telemetry.get("memory_percent")
+        cpu = telemetry.get("cpu_usage_percent")
+        health = telemetry.get("system_health_score")
         top_mem = telemetry.get("top_memory_processes", [])
         top_cpu = telemetry.get("top_cpu_processes", [])
 
         mem_rows = "\n".join(
-            f"| `{p.get('name')}` | `{p.get('pid')}` | `{p.get('ram_mb', 0):.1f} MB` | `{p.get('ram_pct', 0):.1f}%` |"
+            f"| `{p.get('name') or 'Not reported'}` | `{p.get('pid') or 'Not reported'}` | "
+            f"`{format_metric(p.get('ram_mb'), suffix=' MB')}` | "
+            f"`{format_metric(p.get('ram_pct'), suffix='%')}` |"
             for p in top_mem[:4]
-        ) or "| None | - | - | - |"
+        ) or "| No process data available | - | - | - |"
         cpu_rows = "\n".join(
-            f"| `{p.get('name')}` | `{p.get('pid')}` | `{p.get('cpu_pct', 0):.1f}%` |"
+            f"| `{p.get('name') or 'Not reported'}` | `{p.get('pid') or 'Not reported'}` | "
+            f"`{format_metric(p.get('cpu_pct'), suffix='%')}` |"
             for p in top_cpu[:4]
-        ) or "| None | - | - |"
+        ) or "| No process data available | - | - |"
 
-        ubuntu_cmd = 'wsl.exe -d Ubuntu bash -c "uname -a; free -h; df -h; uptime; exec bash"'
-        proposed_commands = [{
-            "id": f"cmd-{uuid.uuid4().hex[:8]}",
-            "command": ubuntu_cmd,
-            "explanation": "Runs a quick system overview (kernel, memory, disk, uptime) in Ubuntu."
-        }]
+        host = telemetry.get("host", {})
+        health_text = f"{health}/100" if isinstance(health, (int, float)) else "Unavailable"
+        network = telemetry.get("internet_available")
+        network_text = "Online" if network is True else "Offline" if network is False else "Unavailable"
+        api_key_name = "GROK_API_KEY" if provider == "grok" else "GEMINI_API_KEY"
         response_md = f"""### 🛡️ KernelSense System Status (Offline Mode)
 
-> **⚠️ AI Provider Unavailable** — Gemini API unreachable. Showing live telemetry snapshot.
+> **⚠️ AI Provider Unavailable** — {provider} and configured fallbacks could not answer. Values below come from the host telemetry collector.
 
 #### 📊 Live Hardware Telemetry:
-* **System Health:** `{health}/100`
-* **CPU Usage:** `{cpu:.1f}%`
-* **RAM Usage:** `{mem:.1f}%` (`{telemetry.get('memory_used_gb', 0):.2f}` / `{telemetry.get('memory_total_gb', 0):.2f}` GB)
-* **Disk Usage:** `{telemetry.get('disk_usage_percent', 0):.1f}%`
+* **Operating System:** `{host.get('os_name') or 'Unavailable'}`
+* **System Health:** `{health_text}`
+* **CPU Usage:** `{format_metric(cpu, suffix='%')}`
+* **RAM Usage:** `{format_metric(mem, suffix='%')}` (`{format_metric(telemetry.get('memory_used_gb'), suffix=' GB')}` / `{format_metric(telemetry.get('memory_total_gb'), suffix=' GB')}`)
+* **Disk Usage:** `{format_metric(telemetry.get('disk_usage_percent'), suffix='%')}`
+* **Network Connectivity:** `{network_text}`
 
 #### 🏆 Top RAM Consumers:
 | Process | PID | RAM | % |
@@ -479,7 +631,7 @@ Searched all local drives for **`{search_target}`** — no matching files found.
 | :--- | :--- | :--- |
 {cpu_rows}
 
-*Check your network connection and verify the Gemini API key in `.env`.*
+*Check your network connection and verify the `{api_key_name}` key.*
 """
         return {
             "response": response_md,
@@ -489,9 +641,9 @@ Searched all local drives for **`{search_target}`** — no matching files found.
                 "nodes": [{"id": "offline", "label": "AI Provider Offline", "type": "system"}],
                 "edges": []
             },
-            "commands": proposed_commands,
+            "commands": [],
             "recommendations": [
-                "Check GEMINI_API_KEY is set correctly in backend/.env",
+                f"Check {api_key_name} is set correctly in backend/.env",
                 "Restart the backend server after updating .env"
             ]
         }

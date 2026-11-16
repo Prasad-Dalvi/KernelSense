@@ -1,30 +1,39 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { RotateCcw, Copy, Check, Sparkles, Terminal, Bot, Send, Zap, ChevronRight } from 'lucide-react';
+import { RotateCcw, Copy, Check, Sparkles, Terminal, Bot, Send, Zap, Mic, MicOff } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { useAssistant } from '../hooks/useAssistant';
+import { transcribeVoice } from '../api/assistantApi';
 import { sound } from '../utils/soundEffects';
 import CommandApproval from '../components/CommandApproval';
 import ToolProgress from '../components/ToolProgress';
 import RootCauseTree from '../components/RootCauseTree';
-import neuralCoreImg from '../assets/neural_core.jpg';
 import styles from './Assistant.module.css';
-
-const SUGGESTED = [
-  { key: '1', text: 'Why is my laptop slow?', tag: 'PERF' },
-  { key: '2', text: 'Diagnose WiFi connection issues', tag: 'NET' },
-  { key: '3', text: 'Show me high memory processes', tag: 'MEM' },
-  { key: '4', text: 'What services are failing?', tag: 'SYSTEMD' },
-  { key: '5', text: 'Find large files on my system', tag: 'DISK' },
-];
 
 export default function Assistant() {
   const { messages, loading, error, sendMessage, handleApprove, handleReject, clearMessages } = useAssistant();
   const [input, setInput] = useState('');
+  const [provider, setProvider] = useState('gemini');
+  const [apiKeys, setApiKeys] = useState({ gemini: '', grok: '' });
+  const apiKey = apiKeys[provider];
   const [searchParams, setSearchParams] = useSearchParams();
   const bottomRef = useRef(null);
   const autoSubmittedRef = useRef(false);
   const inputRef = useRef(null);
+  const audioGraphRef = useRef(null);
+  const streamRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const baseInputRef = useRef('');
+  const recordingTimerRef = useRef(null);
+  const voiceBusyRef = useRef(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [speechError, setSpeechError] = useState(null);
+  const voiceSupported = typeof window !== 'undefined'
+    && Boolean(
+      (window.AudioContext || window.webkitAudioContext)?.prototype?.createScriptProcessor
+      && navigator.mediaDevices?.getUserMedia
+    );
 
   useEffect(() => {
     const q = searchParams.get('q');
@@ -32,20 +41,35 @@ export default function Assistant() {
       autoSubmittedRef.current = true;
       setSearchParams({}, { replace: true });
       sound.send();
-      sendMessage(q);
+      sendMessage(q, { provider, apiKey });
     }
-  }, [searchParams, setSearchParams, sendMessage]);
+  }, [searchParams, setSearchParams, sendMessage, provider, apiKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
+  useEffect(() => () => {
+    if (recordingTimerRef.current) {
+      window.clearTimeout(recordingTimerRef.current);
+    }
+    const graph = audioGraphRef.current;
+    if (graph) {
+      graph.processor.onaudioprocess = null;
+      graph.source.disconnect();
+      graph.processor.disconnect();
+      graph.mute.disconnect();
+      graph.context.close();
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
   const submit = (query) => {
     const q = query ?? input;
-    if (!q.trim() || loading) return;
+    if (!q.trim() || loading || isRecording || isTranscribing) return;
     sound.send();
     setInput('');
-    sendMessage(q);
+    sendMessage(q, { provider, apiKey });
   };
 
   const onKey = (e) => {
@@ -60,12 +84,115 @@ export default function Assistant() {
     clearMessages();
   };
 
+  const finishVoiceRecording = async () => {
+    const graph = audioGraphRef.current;
+    if (!graph) return;
+    if (recordingTimerRef.current) {
+      window.clearTimeout(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    graph.processor.onaudioprocess = null;
+    graph.source.disconnect();
+    graph.processor.disconnect();
+    graph.mute.disconnect();
+    audioGraphRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    setIsRecording(false);
+    setIsTranscribing(true);
+    setSpeechError(null);
+    try {
+      await graph.context.close();
+      const wav = convertPcmChunksToWav(audioChunksRef.current, graph.context.sampleRate);
+      audioChunksRef.current = [];
+      const transcript = (await transcribeVoice(wav)).trim();
+      if (!transcript) throw new Error('No speech was recognized. Try again.');
+      const prefix = baseInputRef.current;
+      setInput(`${prefix}${prefix ? ' ' : ''}${transcript}`);
+    } catch (error) {
+      setSpeechError(error?.message ?? 'Could not transcribe the recording.');
+    } finally {
+      voiceBusyRef.current = false;
+      setIsTranscribing(false);
+    }
+  };
+
+  const toggleVoiceInput = async () => {
+    if (isRecording) {
+      await finishVoiceRecording();
+      return;
+    }
+    if (voiceBusyRef.current) return;
+    if (!voiceSupported) {
+      setSpeechError('Audio recording is not supported by this browser.');
+      return;
+    }
+
+    voiceBusyRef.current = true;
+    baseInputRef.current = input.trimEnd();
+    let context;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      context = new AudioContextClass();
+      await context.resume();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: { ideal: 1 },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      streamRef.current = stream;
+      audioChunksRef.current = [];
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4096, 2, 1);
+      const mute = context.createGain();
+      mute.gain.value = 0;
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer;
+        const samples = new Float32Array(input.length);
+        const channels = Array.from(
+          { length: input.numberOfChannels },
+          (_, index) => input.getChannelData(index)
+        );
+        for (let frame = 0; frame < input.length; frame += 1) {
+          let sample = 0;
+          for (const channel of channels) {
+            sample += channel[frame];
+          }
+          samples[frame] = sample / channels.length;
+        }
+        audioChunksRef.current.push(samples);
+      };
+      source.connect(processor);
+      processor.connect(mute);
+      mute.connect(context.destination);
+      audioGraphRef.current = { context, source, processor, mute };
+      setSpeechError(null);
+      setIsRecording(true);
+      recordingTimerRef.current = window.setTimeout(finishVoiceRecording, 60000);
+    } catch (error) {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      if (context && context.state !== 'closed') await context.close();
+      voiceBusyRef.current = false;
+      const message = error?.name === 'NotAllowedError'
+        ? 'Microphone access was denied. Allow microphone access in your browser settings.'
+        : error?.name === 'NotFoundError'
+        ? 'No microphone was found.'
+        : error?.message ?? 'Could not start voice input.';
+      setSpeechError(message);
+    }
+  };
+
   return (
     <div className={styles.page}>
       {/* ── Chat Feed Stream ── */}
       <div className={styles.chatWindow}>
         {messages.length === 0 ? (
-          <WelcomeHero onSuggest={submit} />
+          <WelcomeHero />
         ) : (
           messages.map((msg) => (
             <MessageBubble
@@ -113,7 +240,7 @@ export default function Assistant() {
         <div className={styles.inputControls}>
           <div className={styles.sessionStatus}>
             <Terminal size={12} color="var(--color-cyan)" />
-            <span>AI LINUX ORCHESTRATION TERMINAL</span>
+            <span>SYSTEM ASSISTANT</span>
           </div>
           {messages.length > 0 && (
             <button className={styles.clearBtn} onClick={handleClear} title="Clear conversation history">
@@ -121,6 +248,33 @@ export default function Assistant() {
               <span>Clear History</span>
             </button>
           )}
+        </div>
+
+        <div className={styles.providerControls}>
+          <label className={styles.providerField}>
+            <span>Ask agent with</span>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              disabled={loading}
+            >
+              <option value="gemini">Gemini</option>
+              <option value="grok">Grok (xAI)</option>
+            </select>
+          </label>
+          <label className={styles.providerField}>
+            <span>{provider === 'gemini' ? 'Gemini' : 'Grok'} API key</span>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKeys((keys) => ({ ...keys, [provider]: e.target.value }))}
+              placeholder="Optional if configured in backend .env"
+              autoComplete="off"
+              spellCheck="false"
+              disabled={loading}
+            />
+          </label>
+          <span className={styles.keyPrivacyNote}>Used for this browser session only; not saved.</span>
         </div>
 
         <div className={styles.inputWrap}>
@@ -131,15 +285,26 @@ export default function Assistant() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
-            placeholder="Ask anything (e.g. 'Why is memory full?', 'Inspect firewall ports', 'Clean old caches')..."
+            placeholder="Ask about your computer or describe an issue..."
             rows={1}
-            disabled={loading}
+            disabled={loading || isRecording || isTranscribing}
           />
+          <button
+            type="button"
+            className={`${styles.voiceButton} ${isRecording ? styles.voiceButtonActive : ''}`}
+            onClick={toggleVoiceInput}
+            disabled={loading || isTranscribing || !voiceSupported}
+            aria-label={isRecording ? 'Stop voice recording' : 'Start voice recording'}
+            aria-pressed={isRecording}
+            title={!voiceSupported ? 'Audio recording is not supported by this browser' : isRecording ? 'Stop recording and transcribe' : 'Record a voice prompt'}
+          >
+            {isRecording ? <MicOff size={15} /> : <Mic size={15} />}
+          </button>
           <button
             id="assistant-send"
             className={styles.sendButton}
             onClick={() => submit()}
-            disabled={loading || !input.trim()}
+            disabled={loading || isRecording || isTranscribing || !input.trim()}
           >
             {loading ? <span className="spin">◌</span> : <Send size={15} />}
           </button>
@@ -150,58 +315,87 @@ export default function Assistant() {
           <span className={styles.hintKey}><kbd>Shift + Enter</kbd> newline</span>
           <span className={styles.hintKey}><kbd>Ctrl + K</kbd> quick ops</span>
         </div>
+        <p className={styles.voiceNote} role={speechError ? 'alert' : 'status'}>
+          {speechError || (isRecording
+            ? 'Recording… click the microphone again to stop. Recording stops automatically after 60 seconds.'
+            : isTranscribing
+            ? 'Transcribing locally with Whisper. First use may take longer while the model downloads…'
+            : voiceSupported
+            ? 'High-accuracy Whisper transcription runs locally. Audio stays in memory and is never sent to Gemini/Grok.'
+            : 'Audio recording is not supported by this browser.')}
+        </p>
       </div>
     </div>
   );
 }
 
+function convertPcmChunksToWav(chunks, sourceRate) {
+  const totalFrames = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const inputFrames = Math.min(totalFrames, Math.floor(sourceRate * 60));
+  if (!inputFrames) throw new Error('No audio was recorded. Try again.');
+
+  const input = new Float32Array(inputFrames);
+  let inputOffset = 0;
+  for (const chunk of chunks) {
+    const frames = Math.min(chunk.length, inputFrames - inputOffset);
+    input.set(chunk.subarray(0, frames), inputOffset);
+    inputOffset += frames;
+    if (inputOffset === inputFrames) break;
+  }
+
+  const targetRate = 16000;
+  const ratio = sourceRate / targetRate;
+  const outputFrames = Math.floor(inputFrames / ratio);
+  const wav = new ArrayBuffer(44 + outputFrames * 2);
+  const view = new DataView(wav);
+  const writeString = (offset, value) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+  writeString(0, 'RIFF');
+  view.setUint32(4, wav.byteLength - 8, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, outputFrames * 2, true);
+  for (let index = 0; index < outputFrames; index += 1) {
+    const sourcePosition = index * ratio;
+    const lower = Math.floor(sourcePosition);
+    const upper = Math.min(lower + 1, inputFrames - 1);
+    const fraction = sourcePosition - lower;
+    const sample = Math.max(-1, Math.min(1, input[lower] * (1 - fraction) + input[upper] * fraction));
+    view.setInt16(44 + index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+  }
+  return new Blob([wav], { type: 'audio/wav' });
+}
+
 // ─── Welcome Hero Nexus with 3D Neural Core ──────────────────────────────
 
-function WelcomeHero({ onSuggest }) {
+function WelcomeHero() {
   return (
     <div className={styles.welcomeContainer}>
       <div className={`${styles.welcomeHeroCard} glass-card`}>
         <div className={styles.welcomeHeroLeft}>
           <div className={styles.modelBadge}>
             <Sparkles size={13} />
-            <span>KERNEL SENSE NEURAL CORE v2.0</span>
+            <span>KERNELSENSE ASSISTANT</span>
           </div>
 
           <h2 className={styles.welcomeTitle}>
-            How can I assist your <span className="grad-text">Linux system</span> today?
+            How can I help with <span className="grad-text">your computer</span>?
           </h2>
 
           <p className={styles.welcomeDesc}>
-            Deep kernel introspection, automated bottleneck diagnosis, root cause tree synthesis, and guarded command remediation.
+            Ask about current system metrics, processes, storage, network, or a proposed action.
           </p>
-        </div>
-
-        <div className={styles.welcomeHeroRight}>
-          <img
-            src={neuralCoreImg}
-            alt="AI Neural Core"
-            className={styles.coreOrbImg}
-          />
-        </div>
-      </div>
-
-      <div className={styles.quickPresetsSection}>
-        <span className={styles.presetsLabel}>RECOMMENDED SYSTEM OPERATIONS:</span>
-        <div className={styles.presetsGrid}>
-          {SUGGESTED.map(({ key, text, tag }) => (
-            <button
-              key={key}
-              className={`${styles.presetCard} glass-card`}
-              onClick={() => {
-                sound.nav();
-                onSuggest(text);
-              }}
-            >
-              <span className={styles.tagPill}>{tag}</span>
-              <span className={styles.presetText}>{text}</span>
-              <ChevronRight size={14} className={styles.presetArrow} />
-            </button>
-          ))}
         </div>
       </div>
     </div>

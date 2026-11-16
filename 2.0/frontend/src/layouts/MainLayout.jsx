@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Bot, Activity, Cpu, HardDrive,
-  History, Terminal, Volume2, VolumeX, Search, Sparkles,
-  ChevronLeft, ChevronRight, Shield, Zap, Circle,
+  History, Terminal, Volume2, VolumeX, Search,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import { isMockMode } from '../api/client';
+import { useHostInfo } from '../hooks/useHostInfo';
 import { sound } from '../utils/soundEffects';
 import CommandPalette from '../components/CommandPalette';
 import styles from './MainLayout.module.css';
@@ -41,6 +41,7 @@ export default function MainLayout({ children }) {
   const [collapsed, setCollapsed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sfxEnabled, setSfxEnabled] = useState(sound.isEnabled());
+  const { data: hostInfo, error: hostInfoError } = useHostInfo();
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -103,18 +104,10 @@ export default function MainLayout({ children }) {
               <span className={styles.brandName}>
                 KERNEL<span className="grad-text-cyan">SENSE</span>
               </span>
-              <span className={styles.brandTag}>AI LINUX PLATFORM</span>
+              <span className={styles.brandTag}>HOST MONITORING</span>
             </div>
           )}
         </div>
-
-        {isMockMode() && !collapsed && (
-          <div className={styles.mockBadgeWrap}>
-            <span className={styles.mockBadge}>
-              <Zap size={10} /> SIMULATED TELEMETRY
-            </span>
-          </div>
-        )}
 
         {/* Navigation List */}
         <nav className={styles.nav}>
@@ -155,10 +148,12 @@ export default function MainLayout({ children }) {
         <div className={styles.sidebarFooter}>
           {!collapsed && (
             <div className={styles.connectionPill}>
-              <span className={`${styles.statusDot} ${isMockMode() ? styles.dotMock : styles.dotLive}`} />
+              <span className={`${styles.statusDot} ${hostInfo ? styles.dotLive : hostInfoError ? styles.dotOffline : styles.dotConnecting}`} />
               <div className={styles.connectionText}>
-                <span className={styles.connStatusTitle}>{isMockMode() ? 'MOCK ENGINE' : 'LIVE KERNEL'}</span>
-                <span className={styles.connHost}>127.0.0.1:8000</span>
+                <span className={styles.connStatusTitle}>
+                  {hostInfo ? 'LIVE TELEMETRY' : hostInfoError ? 'BACKEND OFFLINE' : 'CONNECTING'}
+                </span>
+                {hostInfo?.os_name && <span className={styles.connHost}>{hostInfo.os_name}</span>}
               </div>
             </div>
           )}
@@ -178,8 +173,8 @@ export default function MainLayout({ children }) {
         <header className={styles.header}>
           <div className={styles.headerLeft}>
             <div className={styles.breadcrumb}>
-              <span className={styles.breadRoot}>Linux 6.8</span>
-              <span className={styles.breadSep}>/</span>
+              {hostInfo?.os_name && <span className={styles.breadRoot}>{hostInfo.os_name}</span>}
+              {hostInfo?.os_name && <span className={styles.breadSep}>/</span>}
               <span className={styles.breadActive}>{currentLabel}</span>
             </div>
           </div>

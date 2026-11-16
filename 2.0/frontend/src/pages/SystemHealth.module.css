@@ -80,27 +80,6 @@
   margin-top: 6px;
 }
 
-.heroImgWrap {
-  width: 280px;
-  height: 160px;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  box-shadow: 0 8px 32px rgba(16, 185, 129, 0.2);
-  flex-shrink: 0;
-}
-
-@media (max-width: 900px) {
-  .heroImgWrap { display: none; }
-}
-
-.heroImg {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform: scale(1.05);
-}
-
 /* ── Master Radial Score Card ── */
 .masterScoreCard {
   display: flex;

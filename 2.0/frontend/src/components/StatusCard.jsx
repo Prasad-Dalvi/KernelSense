@@ -5,7 +5,7 @@ import styles from './StatusCard.module.css';
 /**
  * Modern Luminous Glass Metric Card with SVG Sparkline & Gradient Halo.
  */
-export default function StatusCard({ title, value, unit, subtitle, status = 'normal', icon: Icon, trend, variant = 'cyan' }) {
+export default function StatusCard({ title, value, unit, subtitle, status = 'normal', icon: Icon }) {
   const statusClass = {
     good:            styles.good,
     normal:          styles.normal,
@@ -41,11 +41,6 @@ export default function StatusCard({ title, value, unit, subtitle, status = 'nor
         </span>
         {unit && <span className={styles.unit}>{unit}</span>}
 
-        {trend !== undefined && (
-          <span className={`${styles.trendPill} ${trend >= 0 ? styles.trendUp : styles.trendDown}`}>
-            {trend >= 0 ? '▲ +' : '▼ -'}{Math.abs(trend)}%
-          </span>
-        )}
       </div>
 
       {pct !== null && (

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, CheckCircle, AlertTriangle, Info, Terminal, Play, Bot, Copy, Check } from 'lucide-react';
+import { ChevronRight, Terminal, Play, Copy, Check } from 'lucide-react';
 import { fetchHistory } from '../api/historyApi';
 import { useNavigate } from 'react-router-dom';
 import { sound } from '../utils/soundEffects';
@@ -15,6 +15,7 @@ const RISK_ICON = {
 export default function History() {
   const [items, setItems]       = useState([]);
   const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState(null);
   const [selected, setSelected] = useState(null);
   const [copiedCmd, setCopiedCmd] = useState(null);
   const navigate = useNavigate();
@@ -25,7 +26,7 @@ export default function History() {
         setItems(res);
         if (res.length > 0) setSelected(res[0]);
       })
-      .catch(() => {})
+      .catch((err) => setError(err?.message ?? 'Failed to load assistant history.'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -46,7 +47,8 @@ export default function History() {
     setTimeout(() => setCopiedCmd(null), 2000);
   };
 
-  if (loading) return <p className="text-muted pulse" style={{ padding: '20px' }}>$ reading ~/.bash_history & AI execution logs...</p>;
+  if (loading) return <p className="text-muted pulse" style={{ padding: '20px' }}>Loading saved assistant history...</p>;
+  if (error) return <p role="alert" style={{ color: 'var(--color-danger)', padding: '20px' }}>Unable to load assistant history: {error}</p>;
 
   return (
     <div className={styles.page}>
@@ -54,12 +56,12 @@ export default function History() {
       <div className={`${styles.list} hud-card`}>
         <div className={styles.listHeader}>
           <Terminal size={12} className={styles.termIcon} />
-          <span>EXECUTED_SESSIONS_LOG</span>
+          <span>ASSISTANT_HISTORY</span>
           <span className={styles.sessionCount}>({items.length})</span>
         </div>
 
         {items.length === 0 ? (
-          <p className={styles.empty}>-- No command history recorded --</p>
+          <p className={styles.empty}>No assistant history is stored.</p>
         ) : (
           items.map((item) => {
             const isSelected = selected?.id === item.id;
@@ -71,7 +73,7 @@ export default function History() {
               >
                 <div className={styles.itemLeft}>
                   <div className={styles.itemTop}>
-                    <CheckCircle size={12} color="var(--color-success)" />
+                    <Terminal size={12} color="var(--color-text-muted)" />
                     <span className={styles.query}>{item.query}</span>
                   </div>
                   <div className={styles.itemMeta}>
@@ -112,10 +114,8 @@ export default function History() {
                 <span className={styles.metaVal}>{selected.risk_level}</span>
               </div>
               <div className={styles.metaCell}>
-                <span className={styles.metaLabel}>EXECUTION STATUS</span>
-                <span className={`badge ${selected.status === 'success' ? 'badge-success' : 'badge-danger'}`}>
-                  {selected.status?.toUpperCase()}
-                </span>
+                <span className={styles.metaLabel}>RECORD STATE</span>
+                <span className="badge badge-success">STORED LOCALLY</span>
               </div>
             </div>
 
@@ -130,7 +130,7 @@ export default function History() {
 
             {selected.commands?.length > 0 && (
               <div className={styles.sectionWrap}>
-                <p className={styles.sectionLabel}>// EXECUTED BASH COMMANDS</p>
+                <p className={styles.sectionLabel}>// PROPOSED COMMANDS</p>
                 <div className={styles.cmdList}>
                   {selected.commands.map((cmd, i) => {
                     const cmdText = typeof cmd === 'string' ? cmd : cmd?.command || '';

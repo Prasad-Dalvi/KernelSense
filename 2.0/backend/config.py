@@ -11,7 +11,7 @@ from pydantic import BaseModel
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=True)
 
 class Settings(BaseModel):
-    app_name: str = "KernelSense Linux Operations & AI Diagnostics Backend"
+    app_name: str = "KernelSense System Monitoring & AI Diagnostics Backend"
     version: str = "1.0.0"
     host: str = "127.0.0.1"
     port: int = 8000

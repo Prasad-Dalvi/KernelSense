@@ -86,27 +86,6 @@
   letter-spacing: 0.12em;
 }
 
-/* ── Mock Badge ── */
-.mockBadgeWrap {
-  padding: 8px 14px 4px;
-}
-
-.mockBadge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: rgba(245, 158, 11, 0.10);
-  border: 1px solid rgba(245, 158, 11, 0.30);
-  color: var(--color-amber);
-  font-size: 9.5px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  font-family: var(--font-mono);
-}
-
 /* ── Nav ── */
 .nav {
   flex: 1;
@@ -230,7 +209,8 @@
   flex-shrink: 0;
 }
 .dotLive { background: var(--color-emerald); box-shadow: 0 0 10px var(--color-emerald); }
-.dotMock { background: var(--color-amber);   box-shadow: 0 0 10px var(--color-amber); }
+.dotConnecting { background: var(--color-amber); box-shadow: 0 0 10px var(--color-amber); }
+.dotOffline { background: var(--color-rose); box-shadow: 0 0 10px var(--color-rose); }
 
 .connectionText {
   display: flex;

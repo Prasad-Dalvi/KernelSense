@@ -2,18 +2,28 @@
  * Assistant API — wraps POST /ask and related endpoints.
  * Never call axios directly from components.
  */
-import { apiClient, isMockMode } from './client';
-import { getMockAssistantResponse, getMockHistory } from '../mock/mockAssistant';
+import { apiClient } from './client';
 
 /**
  * Send a user query to the AI assistant.
  * @param {string} query
  * @returns {Promise<AssistantResponse>}
  */
-export async function askAssistant(query) {
-  if (isMockMode()) return getMockAssistantResponse(query);
-  const { data } = await apiClient.post('/ask', { query });
+export async function askAssistant(query, { provider = 'gemini', apiKey = '' } = {}) {
+  const { data } = await apiClient.post('/ask', {
+    query,
+    provider,
+    ...(apiKey ? { api_key: apiKey } : {}),
+  });
   return normaliseAssistantResponse(data);
+}
+
+export async function transcribeVoice(audio) {
+  const { data } = await apiClient.post('/voice/transcribe', audio, {
+    headers: { 'Content-Type': 'audio/wav' },
+    timeout: 600000,
+  });
+  return data.text;
 }
 
 /**
@@ -22,9 +32,6 @@ export async function askAssistant(query) {
  * @param {string} requestId
  */
 export async function approveCommand(commandId, requestId, command) {
-  if (isMockMode()) {
-    return { success: true, output: 'Command executed successfully (mock).', status: 'success' };
-  }
   const payload = { command_id: commandId, request_id: requestId };
   if (command) payload.command = command;
   const { data } = await apiClient.post('/commands/approve', payload);
@@ -35,7 +42,6 @@ export async function approveCommand(commandId, requestId, command) {
  * Reject a proposed command.
  */
 export async function rejectCommand(commandId, requestId) {
-  if (isMockMode()) return { success: true };
   const { data } = await apiClient.post('/commands/reject', { command_id: commandId, request_id: requestId });
   return data;
 }
@@ -44,7 +50,6 @@ export async function rejectCommand(commandId, requestId) {
  * Fetch conversation history.
  */
 export async function fetchHistory() {
-  if (isMockMode()) return getMockHistory();
   const { data } = await apiClient.get('/history');
   return Array.isArray(data) ? data : data.items ?? [];
 }

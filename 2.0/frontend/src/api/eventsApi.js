@@ -3,8 +3,7 @@
  * Backend endpoint (conceptual): GET /system/events
  * Member 2: update the endpoint path/params inside fetchEvents() once finalised.
  */
-import { apiClient, isMockMode } from './client';
-import { getMockRecentEvents } from '../mock/mockSystem';
+import { apiClient } from './client';
 
 /**
  * Fetch recent system events.
@@ -12,11 +11,6 @@ import { getMockRecentEvents } from '../mock/mockSystem';
  * @returns {Promise<SystemEvent[]>}
  */
 export async function fetchEvents({ limit = 50, severity } = {}) {
-  if (isMockMode()) {
-    let events = getMockRecentEvents();
-    if (severity) events = events.filter((e) => e.severity === severity);
-    return events.slice(0, limit);
-  }
   const params = { limit };
   if (severity) params.severity = severity;
   const { data } = await apiClient.get('/system/events', { params });
@@ -26,12 +20,14 @@ export async function fetchEvents({ limit = 50, severity } = {}) {
 
 // ─── Normaliser ──────────────────────────────────────────────────────────────
 function normaliseEvent(raw) {
+  const timestamp = raw.timestamp ?? raw.time ?? raw.created_at ?? '';
+  const source = raw.source ?? raw.service ?? raw.unit ?? '';
   return {
-    id:          raw.id          ?? raw._id       ?? Math.random().toString(36).slice(2),
-    timestamp:   raw.timestamp   ?? raw.time       ?? raw.created_at ?? '',
+    id:          raw.id          ?? raw._id       ?? `${timestamp}:${source}`,
+    timestamp,
     title:       raw.title       ?? raw.message    ?? raw.description ?? '',
-    severity:    raw.severity    ?? raw.level      ?? 'info',
-    source:      raw.source      ?? raw.service    ?? raw.unit ?? 'system',
+    severity:    raw.severity    ?? raw.level      ?? 'unknown',
+    source,
     description: raw.description ?? raw.detail     ?? null,
   };
 }

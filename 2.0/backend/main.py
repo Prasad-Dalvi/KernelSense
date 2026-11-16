@@ -4,15 +4,17 @@ Exposes all REST API endpoints for Live System Telemetry, Process Management,
 NLP Log Classification, SQLite History, and ReAct AI Assistant Operations.
 """
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from typing import Any, Dict, List, Literal, Optional
 
 from config import settings
 from core.live_telemetry import telemetry_collector
 from core.process_engine import process_engine
 from core.log_engine import log_engine
+from core.voice_engine import voice_engine
 from core.command_safety import command_safety_engine
 from core.database import db_engine
 from core.ai_agent import ai_agent
@@ -22,7 +24,7 @@ from core.ml_inference import ml_engine
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
-    description="Real-Time Machine Learning & AI-Powered Linux Operations Telemetry Backend"
+    description="Real-time host monitoring and AI-assisted system diagnostics backend"
 )
 
 # Enable CORS for Frontend
@@ -39,6 +41,8 @@ app.add_middleware(
 # -------------------------------------------------------------
 class AskRequest(BaseModel):
     query: str
+    provider: Literal["gemini", "grok"] = "gemini"
+    api_key: Optional[str] = Field(default=None, max_length=512, repr=False)
 
 class CommandApprovalRequest(BaseModel):
     command_id: str
@@ -48,6 +52,8 @@ class CommandApprovalRequest(BaseModel):
 class CommandRejectRequest(BaseModel):
     command_id: str
     request_id: Optional[str] = None
+
+MAX_VOICE_AUDIO_BYTES = 2_000_000
 
 # -------------------------------------------------------------
 # Root & Health Endpoints
@@ -71,7 +77,38 @@ def read_root():
 def handle_ask(req: AskRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
-    return ai_agent.ask(req.query)
+    return ai_agent.ask(req.query, provider=req.provider, api_key=req.api_key)
+
+@app.post("/voice/transcribe")
+async def transcribe_voice(request: Request):
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "audio/wav":
+        raise HTTPException(status_code=415, detail="Send a WAV audio recording.")
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_VOICE_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="Recording must be 60 seconds or shorter.")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid content length.") from exc
+
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_VOICE_AUDIO_BYTES:
+            raise HTTPException(status_code=413, detail="Recording must be 60 seconds or shorter.")
+        chunks.append(chunk)
+
+    try:
+        transcript = await run_in_threadpool(voice_engine.transcribe, b"".join(chunks))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {"text": transcript}
 
 @app.post("/commands/approve")
 def handle_approve_command(req: CommandApprovalRequest):
@@ -113,6 +150,10 @@ def handle_reject_command(req: CommandRejectRequest):
 @app.get("/system/all")
 def get_system_stats():
     return telemetry_collector.get_all_stats()
+
+@app.get("/system/info")
+def get_system_info():
+    return telemetry_collector.get_host_info()
 
 @app.get("/system/cpu")
 def get_cpu():

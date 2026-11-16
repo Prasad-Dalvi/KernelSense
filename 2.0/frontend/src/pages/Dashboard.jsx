@@ -2,30 +2,34 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Cpu, MemoryStick, HardDrive, Wifi, Activity,
-  Sparkles, RefreshCw, Terminal, ShieldCheck, Zap,
-  CheckCircle, ArrowRight, Layers,
+  Sparkles, RefreshCw, ShieldCheck, ArrowRight,
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, Tooltip, YAxis,
 } from 'recharts';
 import { useSystemStats } from '../hooks/useSystemStats';
+import { useHostInfo } from '../hooks/useHostInfo';
 import { fetchEvents } from '../api/eventsApi';
 import { cpuStatus, memoryStatus, storageStatus, networkStatus } from '../utils/statusHelpers';
 import { sound } from '../utils/soundEffects';
 import StatusCard from '../components/StatusCard';
 import Timeline from '../components/Timeline';
-import quantumCpuImg from '../assets/quantum_cpu.jpg';
 import styles from './Dashboard.module.css';
 
 function useEvents(autoRefreshMs = 3000) {
   const [events, setEvents] = useState([]);
   const [evLoading, setEvLoading] = useState(true);
+  const [evError, setEvError] = useState(null);
 
-  const load = () => {
-    fetchEvents({ limit: 10 })
-      .then(setEvents)
-      .catch(() => setEvents([]))
-      .finally(() => setEvLoading(false));
+  const load = async () => {
+    try {
+      setEvents(await fetchEvents({ limit: 10 }));
+      setEvError(null);
+    } catch (error) {
+      setEvError(error?.message ?? 'Failed to load host events.');
+    } finally {
+      setEvLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -36,13 +40,14 @@ function useEvents(autoRefreshMs = 3000) {
     }
   }, [autoRefreshMs]);
 
-  return { events, evLoading, reload: load };
+  return { events, evLoading, evError, reload: load };
 }
 
-const CustomGlassTooltip = ({ active, payload, label, prefix, color }) => {
+const CustomGlassTooltip = ({ active, payload, prefix, color }) => {
   if (!active || !payload?.length) return null;
   const rawVal = payload[0]?.value;
-  const numVal = typeof rawVal === 'number' ? rawVal : Number(rawVal) || 0;
+  if (typeof rawVal !== 'number' || !Number.isFinite(rawVal)) return null;
+  const numVal = rawVal;
   return (
     <div className={styles.chartTooltip}>
       <span className={styles.tooltipLabel}>{prefix} LOAD</span>
@@ -55,7 +60,8 @@ const CustomGlassTooltip = ({ active, payload, label, prefix, color }) => {
 
 export default function Dashboard() {
   const { data, loading, error, reload } = useSystemStats(1000);
-  const { events, evLoading } = useEvents(3000);
+  const { data: hostInfo } = useHostInfo();
+  const { events, evLoading, evError, reload: reloadEvents } = useEvents(5000);
   const navigate = useNavigate();
 
   if (loading) {
@@ -63,7 +69,7 @@ export default function Dashboard() {
       <div className={styles.loadingState}>
         <div className={`${styles.loadingBox} glass-card`}>
           <span className="spin" style={{ color: 'var(--color-cyan)', fontSize: 20 }}>◌</span>
-          <span>Gathering real-time kernel telemetry &amp; device statistics...</span>
+          <span>Reading live host metrics...</span>
         </div>
       </div>
     );
@@ -73,13 +79,13 @@ export default function Dashboard() {
 
   const { cpu, memory, storage, network, health } = data;
 
-  const cpuHistory = (Array.isArray(cpu?.history) && cpu.history.length > 0)
-    ? cpu.history.map((h, i) => (typeof h === 'number' ? { time: `${i}`, value: h } : (h?.value !== undefined ? { time: h.time ?? `${i}`, value: Number(h.value) || 0 } : { time: `${i}`, value: Number(h) || cpu.usage })))
-    : Array.from({ length: 15 }, (_, i) => ({ time: `${i}`, value: cpu?.usage || 0 }));
-
-  const memHistory = (Array.isArray(memory?.history) && memory.history.length > 0)
-    ? memory.history.map((h, i) => (typeof h === 'number' ? { time: `${i}`, value: h } : (h?.value !== undefined ? { time: h.time ?? `${i}`, value: Number(h.value) || 0 } : { time: `${i}`, value: Number(h) || memory.usage })))
-    : Array.from({ length: 15 }, (_, i) => ({ time: `${i}`, value: memory?.usage || 0 }));
+  const cpuHistory = Array.isArray(cpu?.history) ? cpu.history : [];
+  const memHistory = Array.isArray(memory?.history) ? memory.history : [];
+  const activeInterface = network.interfaces.find((iface) => iface.ip && iface.type !== 'loopback');
+  const cpuDetails = [
+    cpu.cores ? `${cpu.cores} cores` : null,
+    hostInfo?.cpu_frequency_mhz ? `${(hostInfo.cpu_frequency_mhz / 1000).toFixed(2)} GHz` : null,
+  ].filter(Boolean).join(' · ');
 
   const cpuSt = cpuStatus(cpu.usage);
   const memSt = memoryStatus(memory.usage);
@@ -97,22 +103,28 @@ export default function Dashboard() {
       <section className={`${styles.heroBanner} glass-card`}>
         <div className={styles.heroContent}>
           <div className={styles.heroBadgeRow}>
-            <span className={styles.systemPill}>
-              <span className={styles.pulseDot} /> LINUX 6.8.0-GENERIC #45-UBUNTU
-            </span>
-            <span className={styles.specPill}>
-              <Cpu size={12} /> {cpu.cores} CORES · 3.60 GHz
-            </span>
-            <span className={styles.specPill}>
-              <Zap size={12} /> UPTIME: 14D 08H
-            </span>
+            {hostInfo?.os_name && (
+              <span className={styles.systemPill}>
+                <span className={styles.pulseDot} /> {hostInfo.os_name}
+              </span>
+            )}
+            {cpuDetails && (
+              <span className={styles.specPill}>
+                <Cpu size={12} /> {cpuDetails}
+              </span>
+            )}
+            {hostInfo && (
+              <span className={styles.specPill}>
+                UPTIME: {formatUptime(hostInfo.uptime_seconds)}
+              </span>
+            )}
           </div>
 
           <h1 className={styles.heroTitle}>
             Kernel Operations <span className="grad-text">Command Center</span>
           </h1>
           <p className={styles.heroSubtitle}>
-            Autonomous AI diagnostics, real-time eBPF monitoring, and sub-millisecond hardware telemetry orchestration.
+            Live host resource metrics, network status, and events collected from the operating system.
           </p>
 
           <div className={styles.heroActions}>
@@ -130,14 +142,6 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className={styles.heroImageWrap}>
-          <img
-            src={quantumCpuImg}
-            alt="Quantum Hardware Telemetry"
-            className={styles.heroImg}
-          />
-          <div className={styles.heroImageOverlay} />
-        </div>
       </section>
 
       {/* ── 2. Top Metric Cards ── */}
@@ -146,33 +150,30 @@ export default function Dashboard() {
           title="CPU Telemetry"
           value={cpu.usage}
           unit="%"
-          subtitle={`${cpu.cores} Cores · ${cpu.temperature ?? '42'}°C Core Temp`}
+          subtitle={cpuDetails || undefined}
           status={cpuSt}
           icon={Cpu}
-          trend={1.2}
         />
         <StatusCard
           title="RAM Utilization"
           value={memory.usage}
           unit="%"
-          subtitle={`${memory.used_gb.toFixed(1)} / ${memory.total_gb} GB Used`}
+          subtitle={formatCapacity(memory.used_gb, memory.total_gb)}
           status={memSt}
           icon={MemoryStick}
-          trend={-0.6}
         />
         <StatusCard
           title="Storage Buffer"
           value={storage.usage}
           unit="%"
-          subtitle={`${storage.used_gb} GB Used / ${storage.total_gb} GB Total`}
+          subtitle={formatCapacity(storage.used_gb, storage.total_gb)}
           status={stoSt}
           icon={HardDrive}
-          trend={0.1}
         />
         <StatusCard
           title="Network Gateway"
-          value={network.internet ? 'Online' : 'Offline'}
-          subtitle={`IP: ${network.interfaces[0]?.ip ?? '192.168.1.105'}`}
+          value={network.internet == null ? null : network.internet ? 'Online' : 'Offline'}
+          subtitle={activeInterface ? `${activeInterface.name}: ${activeInterface.ip}` : undefined}
           status={netSt}
           icon={Wifi}
         />
@@ -225,7 +226,10 @@ export default function Dashboard() {
 
           <div className={styles.categoriesList}>
             {health.categories.map((cat) => {
-              const color = cat.score >= 85
+              const hasScore = Number.isFinite(cat.score);
+              const color = !hasScore
+                ? 'var(--color-text-muted)'
+                : cat.score >= 85
                 ? 'var(--color-emerald)'
                 : cat.score >= 70
                 ? 'var(--color-amber)'
@@ -234,10 +238,10 @@ export default function Dashboard() {
                 <div key={cat.name} className={styles.catRow}>
                   <div className={styles.catHeader}>
                     <span className={styles.catName}>{cat.name}</span>
-                    <span className={styles.catScore} style={{ color }}>{cat.score}%</span>
+                    <span className={styles.catScore} style={{ color }}>{hasScore ? `${cat.score}%` : '—'}</span>
                   </div>
                   <div className={styles.catProgressBg}>
-                    <div className={styles.catProgressFill} style={{ width: `${cat.score}%`, background: color }} />
+                    <div className={styles.catProgressFill} style={{ width: hasScore ? `${cat.score}%` : '0%', background: color }} />
                   </div>
                 </div>
               );
@@ -252,11 +256,11 @@ export default function Dashboard() {
               <Cpu size={16} className={styles.headerIconCyan} />
               <h2 className={styles.panelTitle}>CPU Live Oscilloscope</h2>
             </div>
-            <span className={styles.statRate}>100ms SAMPLING</span>
+            <span className={styles.statRate}>1 SEC REFRESH</span>
           </div>
 
           <div className={styles.chartAreaWrap}>
-            <ResponsiveContainer width="100%" height={110} minWidth={0}>
+            {cpuHistory.length > 0 ? <ResponsiveContainer width="100%" height={110} minWidth={0}>
               <AreaChart data={cpuHistory} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="cpuAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -269,19 +273,19 @@ export default function Dashboard() {
                 <Area type="monotone" dataKey="value" stroke="var(--color-cyan)" strokeWidth={2}
                   fill="url(#cpuAreaGrad)" dot={false} isAnimationActive={false} />
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <p className={styles.eventsLoading}>No CPU samples received.</p>}
           </div>
 
           <div className={styles.panelHeader} style={{ marginTop: 18 }}>
             <div className={styles.panelTitleGroup}>
               <MemoryStick size={16} className={styles.headerIconPurple} />
-              <h2 className={styles.panelTitle}>Memory Buffer Allocation</h2>
+              <h2 className={styles.panelTitle}>Memory Usage History</h2>
             </div>
-            <span className={styles.statRate}>ACTIVE + SWAP</span>
+            <span className={styles.statRate}>RAM</span>
           </div>
 
           <div className={styles.chartAreaWrap}>
-            <ResponsiveContainer width="100%" height={110} minWidth={0}>
+            {memHistory.length > 0 ? <ResponsiveContainer width="100%" height={110} minWidth={0}>
               <AreaChart data={memHistory} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="memAreaGrad" x1="0" y1="0" x2="0" y2="1">
@@ -294,7 +298,7 @@ export default function Dashboard() {
                 <Area type="monotone" dataKey="value" stroke="var(--color-purple)" strokeWidth={2}
                   fill="url(#memAreaGrad)" dot={false} isAnimationActive={false} />
               </AreaChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer> : <p className={styles.eventsLoading}>No memory samples received.</p>}
           </div>
         </section>
 
@@ -303,16 +307,18 @@ export default function Dashboard() {
           <div className={styles.panelHeader} style={{ padding: '16px 20px 8px' }}>
             <div className={styles.panelTitleGroup}>
               <Activity size={16} className={styles.headerIconCyan} />
-              <h2 className={styles.panelTitle}>Kernel Journal Events</h2>
+              <h2 className={styles.panelTitle}>System Events</h2>
             </div>
-            <button className={styles.refreshBtn} onClick={() => { sound.click(); reload(); }} title="Refresh Events">
+            <button className={styles.refreshBtn} onClick={() => { sound.click(); reloadEvents(); }} title="Refresh Events">
               <RefreshCw size={12} />
             </button>
           </div>
 
           <div className={styles.eventsScroll}>
             {evLoading ? (
-              <p className={styles.eventsLoading}>Fetching event journal...</p>
+              <p className={styles.eventsLoading}>Reading host events...</p>
+            ) : evError ? (
+              <p className={styles.eventsLoading}>Unable to read host events: {evError}</p>
             ) : (
               <Timeline events={events} />
             )}
@@ -321,6 +327,19 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+function formatCapacity(used, total) {
+  if (used == null || total == null) return undefined;
+  return `${used.toFixed(1)} / ${total.toFixed(1)} GB used`;
+}
+
+function formatUptime(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null;
+  const totalHours = Math.floor(seconds / 3600);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
 }
 
 function ErrorState({ message, onRetry }) {

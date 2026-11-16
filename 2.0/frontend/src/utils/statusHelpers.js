@@ -57,6 +57,7 @@ export function storageStatus(usagePercent) {
  * @returns {Status}
  */
 export function networkStatus(internetAvailable) {
+  if (internetAvailable == null) return 'unknown';
   return internetAvailable ? 'good' : 'critical';
 }
 

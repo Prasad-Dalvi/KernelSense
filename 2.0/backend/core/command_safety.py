@@ -118,14 +118,23 @@ class CommandSafetyEngine:
                     if banner_match:
                         app_to_launch = banner_match.group(1).strip()
 
-                    # 2. Check if an explicit shortcut or exe path is in the command
+                    # 2. Check if an explicit shortcut, exe, or document path is in the command
                     import ctypes
-                    path_match = re.search(r'([A-Za-z]:[/\\].+?\.(?:lnk|exe))', fixed_cmd, re.I)
+                    path_match = re.search(r'([A-Za-z]:[/\\].+?\.(?:lnk|exe|pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|json|log|py|java|cpp|c|html|css|js))', fixed_cmd, re.I)
                     if path_match:
                         target_path = path_match.group(1).replace('/', '\\').strip('"\'')
                         if os.path.exists(target_path):
                             ctypes.windll.shell32.ShellExecuteW(None, "open", target_path, None, None, 1)
                             app_to_launch = None # already launched directly
+
+                    # 3. Check if banner identifies local file launch: e.g. "KernelSense: Launching Local File: ...; Path: ..."
+                    if not path_match:
+                        path_in_banner = re.search(r'Path:\s*([^;\"]+)', fixed_cmd, re.I)
+                        if path_in_banner:
+                            f_cand = path_in_banner.group(1).strip()
+                            if os.path.exists(f_cand):
+                                ctypes.windll.shell32.ShellExecuteW(None, "open", f_cand, None, None, 1)
+                                app_to_launch = None
 
                     # 3. If app was identified by banner, launch via app_registry
                     if app_to_launch:

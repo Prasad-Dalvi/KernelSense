@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { ArrowUp, ArrowDown, RefreshCw, Search, Bot, Zap, Filter } from 'lucide-react';
+import { ArrowUp, ArrowDown, RefreshCw, Search, Bot } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useProcesses } from '../hooks/useProcesses';
+import { useSystemStats } from '../hooks/useSystemStats';
 import { sound } from '../utils/soundEffects';
 import styles from './Processes.module.css';
 
@@ -11,14 +12,9 @@ const STATUS_COLOR = {
   stopped:  'var(--color-danger)',
 };
 
-const STATUS_SYMBOL = {
-  running:  'R [RUNNING]',
-  sleeping: 'S [SLEEP]',
-  stopped:  'T [STOPPED]',
-};
-
 export default function Processes() {
   const { processes, loading, error, reload, sortKey, sortDir, toggleSort } = useProcesses(1000);
+  const { data: systemStats } = useSystemStats(1000);
   const [filterText, setFilterText] = useState('');
   const searchRef = useRef(null);
   const navigate = useNavigate();
@@ -39,9 +35,9 @@ export default function Processes() {
   };
 
   const filteredProcesses = processes.filter(p =>
-    p.name.toLowerCase().includes(filterText.toLowerCase()) ||
+    (p.name ?? '').toLowerCase().includes(filterText.toLowerCase()) ||
     String(p.pid).includes(filterText) ||
-    p.user.toLowerCase().includes(filterText.toLowerCase())
+    (p.user ?? '').toLowerCase().includes(filterText.toLowerCase())
   );
 
   const runningCount = processes.filter(p => p.status === 'running').length;
@@ -51,7 +47,7 @@ export default function Processes() {
     return (
       <div className={styles.loading}>
         <span className="spin" style={{ color: 'var(--color-green)' }}>◌</span>
-        <span className="pulse">$ parsing /proc/[pid]/stat & /proc/[pid]/status...</span>
+        <span className="pulse">Reading the live process list...</span>
       </div>
     );
   }
@@ -67,27 +63,24 @@ export default function Processes() {
 
   return (
     <div className={styles.page}>
-      {/* ── BTOP Summary Telemetry Header ── */}
       <div className={`${styles.telemetryHeader} hud-card`}>
         <div className={styles.teleItem}>
-          <span className={styles.teleKey}>TOTAL TASKS:</span>
+          <span className={styles.teleKey}>LISTED PROCESSES:</span>
           <span className={styles.teleVal}>{processes.length}</span>
         </div>
         <div className={styles.teleItem}>
-          <span className={styles.teleKey}>RUNNING (R):</span>
+          <span className={styles.teleKey}>RUNNING:</span>
           <span className={styles.teleValGreen}>{runningCount}</span>
         </div>
         <div className={styles.teleItem}>
-          <span className={styles.teleKey}>SLEEPING (S):</span>
+          <span className={styles.teleKey}>SLEEPING:</span>
           <span className={styles.teleVal}>{sleepingCount}</span>
         </div>
         <div className={styles.teleItem}>
-          <span className={styles.teleKey}>LOAD AVG:</span>
-          <span className={styles.teleValAccent}>0.85 0.92 0.78</span>
-        </div>
-        <div className={styles.teleItem}>
           <span className={styles.teleKey}>SWAP USED:</span>
-          <span className={styles.teleVal}>0.4 / 8.0 GB (5%)</span>
+          <span className={styles.teleVal}>
+            {formatSwap(systemStats?.memory?.swap_used, systemStats?.memory?.swap_total)}
+          </span>
         </div>
       </div>
 
@@ -99,7 +92,7 @@ export default function Processes() {
             ref={searchRef}
             type="text"
             className={styles.searchInput}
-            placeholder="Filter by process name, PID, or user (e.g. 'nginx', 'root', '1234')..."
+            placeholder="Filter by process name, PID, or user..."
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
           />
@@ -114,7 +107,7 @@ export default function Processes() {
           </span>
           <button className={styles.refreshBtn} onClick={() => { sound.click(); reload(); }} title="Refresh processes now">
             <RefreshCw size={11} />
-            <span>POLL /PROC</span>
+            <span>REFRESH</span>
           </button>
         </div>
       </div>
@@ -140,7 +133,7 @@ export default function Processes() {
               >
                 %MEM <SortIcon col="memory_percent" />
               </th>
-              <th className={styles.th}>RSS RESIDENT</th>
+              <th className={styles.th}>MEMORY (RSS)</th>
               <th className={styles.th}>USER</th>
               <th className={styles.th}>STATE</th>
               <th className={styles.th} style={{ textAlign: 'right' }}>ACTIONS</th>
@@ -162,25 +155,25 @@ export default function Processes() {
                   <td className={styles.td}>
                     <div className={styles.usageWrapper}>
                       <span className={styles.usageNum} style={{ color: cpuColor, fontWeight: p.cpu_percent >= 40 ? 800 : 500 }}>
-                        {p.cpu_percent.toFixed(1)}%
+                        {formatPercent(p.cpu_percent)}
                       </span>
-                      <InlineBar value={p.cpu_percent} max={100} warn={40} danger={80} />
+                      {Number.isFinite(p.cpu_percent) && <InlineBar value={p.cpu_percent} max={100} warn={40} danger={80} />}
                     </div>
                   </td>
                   <td className={styles.td}>
                     <div className={styles.usageWrapper}>
                       <span className={styles.usageNum} style={{ color: memColor, fontWeight: p.memory_percent >= 10 ? 800 : 500 }}>
-                        {p.memory_percent.toFixed(1)}%
+                        {formatPercent(p.memory_percent)}
                       </span>
-                      <InlineBar value={p.memory_percent} max={30} warn={10} danger={25} />
+                      {Number.isFinite(p.memory_percent) && <InlineBar value={p.memory_percent} max={30} warn={10} danger={25} />}
                     </div>
                   </td>
                   <td className={`${styles.td} ${styles.mem}`}>
-                    {p.memory_mb
+                    {Number.isFinite(p.memory_mb)
                       ? (p.memory_mb >= 1024 ? `${(p.memory_mb / 1024).toFixed(2)} GB` : `${p.memory_mb.toFixed(0)} MB`)
-                      : '—'}
+                      : 'Not reported'}
                   </td>
-                  <td className={`${styles.td} ${styles.user}`}>{p.user}</td>
+                  <td className={`${styles.td} ${styles.user}`}>{p.user ?? 'Not reported'}</td>
                   <td className={styles.td}>
                     <span
                       className={styles.stateBadge}
@@ -189,7 +182,7 @@ export default function Processes() {
                         borderColor: STATUS_COLOR[p.status] ?? 'var(--color-border)',
                       }}
                     >
-                      {STATUS_SYMBOL[p.status] ?? p.status}
+                      {p.status ? p.status.toUpperCase() : 'NOT REPORTED'}
                     </span>
                   </td>
                   <td className={styles.td} style={{ textAlign: 'right' }}>
@@ -210,6 +203,16 @@ export default function Processes() {
       </div>
     </div>
   );
+}
+
+function formatPercent(value) {
+  return Number.isFinite(value) ? `${value.toFixed(1)}%` : 'Not reported';
+}
+
+function formatSwap(used, total) {
+  return Number.isFinite(used) && Number.isFinite(total)
+    ? `${used.toFixed(2)} / ${total.toFixed(2)} GB`
+    : 'Not reported';
 }
 
 function InlineBar({ value, max, warn, danger }) {

@@ -13,6 +13,8 @@ import os
 import socket
 import psutil
 import numpy as np
+import platform
+import datetime
 from typing import Dict, Any, List
 from collections import deque
 
@@ -25,12 +27,10 @@ class TelemetryCollector:
         self.last_net_time = time.time()
         self.last_disk_io = psutil.disk_io_counters()
         self.last_disk_time = time.time()
+        cpu_stats = psutil.cpu_stats()
+        self.last_context_switches = cpu_stats.ctx_switches if cpu_stats else 0
+        self.last_context_switch_time = time.monotonic()
         
-        # Initialize history buffers with initial samples
-        for _ in range(10):
-            self.cpu_history.append(psutil.cpu_percent(interval=None))
-            self.memory_history.append(psutil.virtual_memory().percent)
-
         self.last_internet_check = 0.0
         self.cached_internet_available = True
 
@@ -40,19 +40,11 @@ class TelemetryCollector:
         overall = float(np.mean(per_core)) if per_core else float(psutil.cpu_percent(interval=None))
         self.cpu_history.append(round(overall, 1))
         
-        # Load average (Linux has getloadavg, on Windows fallback to simulated rolling load)
+        # Windows does not expose a load average through psutil or os.getloadavg.
         try:
             load_avg = [round(x, 2) for x in os.getloadavg()]
         except (AttributeError, OSError):
-            # Windows fallback based on recent history
-            recent = list(self.cpu_history)[-10:]
-            avg = float(np.mean(recent)) if recent else overall
-            cores = psutil.cpu_count(logical=True) or 1
-            load_avg = [
-                round(avg / 100.0 * cores, 2),
-                round((avg * 0.95) / 100.0 * cores, 2),
-                round((avg * 0.90) / 100.0 * cores, 2)
-            ]
+            load_avg = None
             
         return {
             "cpu_usage": round(overall, 1),
@@ -107,17 +99,17 @@ class TelemetryCollector:
             except (PermissionError, OSError):
                 continue
                 
-        total_gb = round(total_bytes / (1024 ** 3), 2) if total_bytes > 0 else 1.0
-        used_gb = round(used_bytes / (1024 ** 3), 2)
-        avail_gb = round(free_bytes / (1024 ** 3), 2)
-        usage_pct = round((used_bytes / total_bytes * 100.0), 1) if total_bytes > 0 else 0.0
+        total_gb = round(total_bytes / (1024 ** 3), 2) if total_bytes > 0 else None
+        used_gb = round(used_bytes / (1024 ** 3), 2) if total_bytes > 0 else None
+        avail_gb = round(free_bytes / (1024 ** 3), 2) if total_bytes > 0 else None
+        usage_pct = round((used_bytes / total_bytes * 100.0), 1) if total_bytes > 0 else None
         
         # Recommendations
         recs = []
-        if usage_pct > 85.0:
-            recs.append("Disk utilization exceeds 85%. Run package cache cleaner or purge temp files.")
-        if usage_pct > 92.0:
-            recs.append("CRITICAL: Root filesystem close to exhaustion. Check /var/log or Docker images.")
+        if usage_pct is not None and usage_pct > 85.0:
+            recs.append("Detected volume usage exceeds 85%. Review large files and installed applications.")
+        if usage_pct is not None and usage_pct > 92.0:
+            recs.append("Detected volume usage exceeds 92%. Free space on a mounted volume.")
             
         return {
             "usage_percent": usage_pct,
@@ -125,11 +117,6 @@ class TelemetryCollector:
             "used_gb": used_gb,
             "available_gb": avail_gb,
             "partitions": partition_details,
-            "largest_dirs": [
-                {"path": "/var/log", "size_gb": 3.2, "category": "Logs"},
-                {"path": "/var/lib/docker", "size_gb": 8.5, "category": "Containers"},
-                {"path": "/home/user/.cache", "size_gb": 4.1, "category": "Cache"}
-            ],
             "recommendations": recs
         }
 
@@ -205,20 +192,34 @@ class TelemetryCollector:
         # Disk I/O rate
         now = time.time()
         dt = max(now - self.last_disk_time, 0.1)
-        curr_disk = psutil.disk_io_counters() or type('obj', (object,), {'read_bytes': 0, 'write_bytes': 0})()
-        read_rate = (curr_disk.read_bytes - getattr(self.last_disk_io, 'read_bytes', 0)) / dt / (1024 * 1024)
-        write_rate = (curr_disk.write_bytes - getattr(self.last_disk_io, 'write_bytes', 0)) / dt / (1024 * 1024)
+        curr_disk = psutil.disk_io_counters()
+        if curr_disk is None or self.last_disk_io is None:
+            raise RuntimeError("Disk I/O counters are unavailable on this system.")
+        read_rate = (curr_disk.read_bytes - self.last_disk_io.read_bytes) / dt / (1024 * 1024)
+        write_rate = (curr_disk.write_bytes - self.last_disk_io.write_bytes) / dt / (1024 * 1024)
         self.last_disk_io = curr_disk
         self.last_disk_time = now
         
         # Network rate
         net_s = self.get_network_stats()
         
-        # Fast thread estimate based on active PID count
-        try:
-            num_threads = len(psutil.pids()) * 4
-        except Exception:
-            num_threads = 1200
+        num_threads = 0
+        for process in psutil.process_iter(["num_threads"]):
+            try:
+                num_threads += process.info.get("num_threads") or 0
+            except (psutil.Error, OSError):
+                continue
+
+        cpu_stats = psutil.cpu_stats()
+        context_switches = 0.0
+        if cpu_stats is not None:
+            context_switch_time = time.monotonic()
+            elapsed = max(context_switch_time - self.last_context_switch_time, 0.001)
+            context_switches = max(
+                cpu_stats.ctx_switches - self.last_context_switches, 0
+            ) / elapsed
+            self.last_context_switches = cpu_stats.ctx_switches
+            self.last_context_switch_time = context_switch_time
             
         return {
             'cpu_percent': float(cpu_s['cpu_usage']),
@@ -230,8 +231,41 @@ class TelemetryCollector:
             'disk_write_mbs': round(max(write_rate, 0.0), 2),
             'net_sent_mbs': round(net_s['upload_mbps'] / 8.0, 2),
             'net_recv_mbs': round(net_s['download_mbps'] / 8.0, 2),
-            'context_switches': 2500.0, # Baseline
+            'context_switches': float(context_switches),
             'num_threads': float(num_threads)
+        }
+
+    def get_host_info(self) -> Dict[str, Any]:
+        """Returns host identity and hardware values available from the OS."""
+        system = platform.system()
+        release = platform.release()
+        version = platform.version()
+        os_name = f"{system} {release}".strip()
+
+        if system == "Windows":
+            try:
+                build = int(version.rsplit(".", 1)[-1])
+            except ValueError:
+                build = 0
+            if build >= 22000:
+                os_name = "Windows 11"
+            elif build >= 10240:
+                os_name = "Windows 10"
+
+        boot_time = psutil.boot_time()
+        frequency = psutil.cpu_freq()
+        return {
+            "os_name": os_name,
+            "os_release": release,
+            "os_version": version,
+            "host_name": platform.node(),
+            "machine": platform.machine(),
+            "processor": platform.processor() or None,
+            "logical_cores": psutil.cpu_count(logical=True),
+            "physical_cores": psutil.cpu_count(logical=False),
+            "cpu_frequency_mhz": round(frequency.current, 1) if frequency else None,
+            "boot_time": datetime.datetime.fromtimestamp(boot_time).astimezone().isoformat(timespec="seconds"),
+            "uptime_seconds": max(time.time() - boot_time, 0.0),
         }
 
     def get_system_health(self) -> Dict[str, Any]:
@@ -250,15 +284,23 @@ class TelemetryCollector:
         mem_status = "healthy" if mem_score > 70 else ("degraded" if mem_score > 40 else "critical")
         
         # Category 3: Storage Health
-        stor_score = max(100 - int(stor['usage_percent'] * 0.95), 10)
-        stor_status = "healthy" if stor_score > 70 else ("degraded" if stor_score > 40 else "critical")
+        if stor['usage_percent'] is None:
+            stor_score, stor_status = None, "unknown"
+        else:
+            stor_score = max(100 - int(stor['usage_percent'] * 0.95), 10)
+            stor_status = "healthy" if stor_score > 70 else ("degraded" if stor_score > 40 else "critical")
         
         # Category 4: Network Health
         net_score = 95 if net['internet_available'] else 30
         net_status = "healthy" if net['internet_available'] else "critical"
         
         # Weighted Overall Health Score
-        overall = int(0.30 * cpu_score + 0.35 * mem_score + 0.20 * stor_score + 0.15 * net_score)
+        measured_weight = 0.30 + 0.35 + 0.15
+        weighted_score = 0.30 * cpu_score + 0.35 * mem_score + 0.15 * net_score
+        if stor_score is not None:
+            measured_weight += 0.20
+            weighted_score += 0.20 * stor_score
+        overall = int(weighted_score / measured_weight)
         
         categories = [
             {
@@ -279,8 +321,19 @@ class TelemetryCollector:
                 "name": "Storage & Filesystem",
                 "score": stor_score,
                 "status": stor_status,
-                "explanation": f"Primary drive is at {stor['usage_percent']}% capacity ({stor['available_gb']} GB free).",
-                "recommendation": "Storage healthy" if stor_score > 70 else "Clean package caches & old logs"
+                "explanation": (
+                    f"Detected volumes are at {stor['usage_percent']}% capacity "
+                    f"({stor['available_gb']} GB free)."
+                    if stor['usage_percent'] is not None
+                    else "No mounted volumes could be measured."
+                ),
+                "recommendation": (
+                    ""
+                    if stor['usage_percent'] is None
+                    else "Storage healthy"
+                    if stor_score > 70
+                    else "Review files and applications on the detected volumes"
+                )
             },
             {
                 "name": "Network & Sockets",
@@ -312,15 +365,23 @@ class TelemetryCollector:
         mem_status = "healthy" if mem_score > 70 else ("degraded" if mem_score > 40 else "critical")
 
         # Category 3: Storage Health
-        stor_score = max(100 - int(stor['usage_percent'] * 0.95), 10)
-        stor_status = "healthy" if stor_score > 70 else ("degraded" if stor_score > 40 else "critical")
+        if stor['usage_percent'] is None:
+            stor_score, stor_status = None, "unknown"
+        else:
+            stor_score = max(100 - int(stor['usage_percent'] * 0.95), 10)
+            stor_status = "healthy" if stor_score > 70 else ("degraded" if stor_score > 40 else "critical")
 
         # Category 4: Network Health
         net_score = 95 if net['internet_available'] else 30
         net_status = "healthy" if net['internet_available'] else "critical"
 
         # Weighted Overall Health Score
-        overall = int(0.30 * cpu_score + 0.35 * mem_score + 0.20 * stor_score + 0.15 * net_score)
+        measured_weight = 0.30 + 0.35 + 0.15
+        weighted_score = 0.30 * cpu_score + 0.35 * mem_score + 0.15 * net_score
+        if stor_score is not None:
+            measured_weight += 0.20
+            weighted_score += 0.20 * stor_score
+        overall = int(weighted_score / measured_weight)
 
         health = {
             "score": overall,
@@ -343,8 +404,19 @@ class TelemetryCollector:
                     "name": "Storage & Filesystem",
                     "score": stor_score,
                     "status": stor_status,
-                    "explanation": f"Primary drive is at {stor['usage_percent']}% capacity ({stor['available_gb']} GB free).",
-                    "recommendation": "Storage healthy" if stor_score > 70 else "Clean package caches & old logs"
+                    "explanation": (
+                        f"Detected volumes are at {stor['usage_percent']}% capacity "
+                        f"({stor['available_gb']} GB free)."
+                        if stor['usage_percent'] is not None
+                        else "No mounted volumes could be measured."
+                    ),
+                    "recommendation": (
+                        ""
+                        if stor['usage_percent'] is None
+                        else "Storage healthy"
+                        if stor_score > 70
+                        else "Review files and applications on the detected volumes"
+                    )
                 },
                 {
                     "name": "Network & Sockets",

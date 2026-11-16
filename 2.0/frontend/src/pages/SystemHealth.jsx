@@ -1,15 +1,16 @@
 import React from 'react';
-import { Activity, CheckCircle, AlertCircle, AlertTriangle, Sparkles, ShieldCheck, ArrowRight, Server, Cpu, Database } from 'lucide-react';
+import { Activity, CheckCircle, AlertCircle, AlertTriangle, Sparkles, ShieldCheck, ArrowRight } from 'lucide-react';
 import { useSystemStats } from '../hooks/useSystemStats';
 import { useNavigate } from 'react-router-dom';
 import { sound } from '../utils/soundEffects';
-import datacenterImg from '../assets/cyber_datacenter.jpg';
 import styles from './SystemHealth.module.css';
 
 const STATUS_MAP = {
-  good:            { label: 'OPTIMAL',    icon: CheckCircle,   cls: styles.good,    color: 'var(--color-emerald)' },
-  needs_attention: { label: 'ATTENTION',  icon: AlertTriangle, cls: styles.warn,    color: 'var(--color-amber)'   },
-  critical:        { label: 'CRITICAL',   icon: AlertCircle,   cls: styles.danger,  color: 'var(--color-rose)'    },
+  healthy:         { label: 'HEALTHY',    icon: CheckCircle,   cls: styles.good,    color: 'var(--color-emerald)' },
+  good:            { label: 'HEALTHY',    icon: CheckCircle,   cls: styles.good,    color: 'var(--color-emerald)' },
+  degraded:        { label: 'DEGRADED',   icon: AlertTriangle, cls: styles.warn,    color: 'var(--color-amber)' },
+  needs_attention: { label: 'ATTENTION',  icon: AlertTriangle, cls: styles.warn,    color: 'var(--color-amber)' },
+  critical:        { label: 'CRITICAL',   icon: AlertCircle,   cls: styles.danger,  color: 'var(--color-rose)' },
   unknown:         { label: 'UNKNOWN',    icon: Activity,      cls: styles.neutral, color: 'var(--color-text-muted)' },
 };
 
@@ -17,7 +18,7 @@ export default function SystemHealth() {
   const { data, loading, error, reload } = useSystemStats(1000);
   const navigate = useNavigate();
 
-  if (loading) return <p className="text-muted pulse" style={{ padding: '24px' }}>Auditing kernel subsystems &amp; hardware thermals...</p>;
+  if (loading) return <p className="text-muted pulse" style={{ padding: '24px' }}>Calculating health from current host metrics...</p>;
   if (error) return <div style={{ color: 'var(--color-danger)', padding: '24px' }}>Error: {error} <button onClick={reload}>Retry</button></div>;
 
   const { health } = data;
@@ -29,7 +30,6 @@ export default function SystemHealth() {
 
   return (
     <div className={styles.page}>
-      {/* ── 1. Hero Datacenter Health Banner ── */}
       <section className={`${styles.healthHero} glass-card`}>
         <div className={styles.heroLeft}>
           <div className={styles.badgeRow}>
@@ -37,16 +37,16 @@ export default function SystemHealth() {
               <ShieldCheck size={13} /> HEALTH SCORE: {health.score}/100
             </span>
             <span className={styles.subsystemPill}>
-              <Server size={12} /> 6 SUBSYSTEMS MONITORED
+              {health.categories.length} METRIC CATEGORIES
             </span>
           </div>
 
           <h1 className={styles.heroTitle}>
-            Kernel &amp; Subsystem <span className="grad-text">Health Audit</span>
+            Host System <span className="grad-text">Health</span>
           </h1>
 
           <p className={styles.heroSubtitle}>
-            Continuous hardware thermal monitoring, eBPF scheduler analysis, memory leak detection, and automatic remediation recommendations.
+            The score is calculated from measured CPU, memory, mounted-volume, and network metrics.
           </p>
 
           <div className={styles.heroActions}>
@@ -63,9 +63,6 @@ export default function SystemHealth() {
           </div>
         </div>
 
-        <div className={styles.heroImgWrap}>
-          <img src={datacenterImg} alt="Linux Datacenter" className={styles.heroImg} />
-        </div>
       </section>
 
       {/* ── 2. Master Radial Score Card ── */}
@@ -103,7 +100,7 @@ export default function SystemHealth() {
              'Degraded Subsystem Performance Detected'}
           </h3>
           <p className={styles.scoreDesc}>
-            Real-time telemetry gathered across CPU load balancing, swap pressure, disk I/O throughput, socket latency, and security firewall policies.
+            Current host measurements are summarized using the scoring rules shown by each metric category.
           </p>
         </div>
       </div>
@@ -113,6 +110,7 @@ export default function SystemHealth() {
         {health.categories.map((cat) => {
           const cfg = STATUS_MAP[cat.status] ?? STATUS_MAP.unknown;
           const Icon = cfg.icon;
+          const hasScore = Number.isFinite(cat.score);
 
           return (
             <div key={cat.name} className={`${styles.catCard} ${cfg.cls} glass-card`}>
@@ -124,11 +122,11 @@ export default function SystemHealth() {
                     {cfg.label}
                   </span>
                 </div>
-                <span className={styles.catScoreNum} style={{ color: cfg.color }}>{cat.score}%</span>
+                <span className={styles.catScoreNum} style={{ color: cfg.color }}>{hasScore ? `${cat.score}%` : '—'}</span>
               </div>
 
               <div className={styles.barWrap}>
-                <div className={styles.barFill} style={{ width: `${cat.score}%`, background: cfg.color }} />
+                <div className={styles.barFill} style={{ width: hasScore ? `${cat.score}%` : '0%', background: cfg.color }} />
               </div>
 
               <p className={styles.explanation}>{cat.explanation}</p>
