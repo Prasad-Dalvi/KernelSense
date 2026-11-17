@@ -11,7 +11,7 @@ This guide explains the runnable KernelSense application, its design, current ca
 - A React dashboard and assistant interface.
 - A Python/FastAPI backend that reads host telemetry through `psutil`.
 - Scikit-learn models for telemetry anomaly scoring and system-log text classification.
-- Gemini and xAI Grok cloud-provider options, with Groq and local Ollama as additional backend fallbacks.
+- Gemini and xAI Grok cloud-provider options with explicit model selection.
 - Local SQLite storage for assistant history.
 - Windows host telemetry and System/Application event-log access, plus optional commands routed to Ubuntu under WSL.
 
@@ -19,14 +19,14 @@ The current implementation is best described as a **Windows-hosted system-monito
 
 ### Short explanation for a teammate
 
-> KernelSense shows host system metrics in a web dashboard and lets a user ask an assistant for explanations or proposed actions. The backend adds a telemetry snapshot to the request, asks a selected AI provider for structured intent and response data, then formats that into the UI. File searches, desktop launches, and shell commands are presented as actions; a user can approve or reject proposed commands.
+> KernelSense shows host system metrics in a web dashboard and lets a user ask an assistant for explanations or proposed actions. The backend handles supported common requests locally first and sends unrecognized requests to the selected AI provider for a compact response or command proposal. File searches, desktop launches, and shell commands are presented as actions; command proposals include a risk assessment and require explicit user approval.
 
 ## 2. Goals and user-facing features
 
 The codebase is designed to bring monitoring, diagnosis, and a few common operating-system tasks into one interface:
 
 1. **System dashboard:** OS/build, CPU, memory, storage, network, uptime, and a calculated health score from the backend host.
-2. **Assistant:** Free-form questions, system diagnosis, file search, application or URL launch requests, and selected Linux/OS command requests.
+2. **Assistant:** Free-form questions, system diagnosis, file search, local directory listing, application or URL launch requests, and selected Linux/OS command requests.
 3. **Processes:** List running processes and request process termination.
 4. **Storage:** Display disk and partition information.
 5. **System health:** Show a weighted health score and category-level explanations.
@@ -34,6 +34,7 @@ The codebase is designed to bring monitoring, diagnosis, and a few common operat
 7. **History:** Review persisted assistant queries and summaries.
 8. **Command review:** Show proposed commands with Execute/Reject controls.
 9. **Voice input:** Record a prompt in the browser and transcribe it with the local Whisper small model. The transcript remains editable and is not automatically submitted; the model downloads on first use, while audio stays local and is deleted after transcription.
+10. **Read-only terminal:** Browse folders and view selected Windows system information through a restricted local command panel.
 
 The frontend routes are defined in [`2.0/frontend/src/App.jsx`](./2.0/frontend/src/App.jsx); the individual pages are in [`2.0/frontend/src/pages/`](./2.0/frontend/src/pages/).
 
@@ -49,8 +50,7 @@ flowchart LR
     P --> G[LLM provider gateway]
     G --> GM[Gemini]
     G --> XK[Grok / xAI]
-    G --> GQ[Groq fallback]
-    G --> OL[Ollama fallback]
+    UI -->|read-only terminal requests| API
     P --> O[Windows / WSL / file tools]
     P --> DB[(SQLite history)]
     API --> ML[Scikit-learn inference]
@@ -63,8 +63,8 @@ flowchart LR
 |---|---|---|
 | Web UI | React 19, Vite, React Router, Axios, Recharts | Dashboard, assistant chat, system pages, and API calls. |
 | API | FastAPI, Pydantic, Uvicorn | Request validation and REST endpoints. Main entry point: [`2.0/backend/main.py`](./2.0/backend/main.py). |
-| Assistant orchestration | [`core/ai_agent.py`](./2.0/backend/core/ai_agent.py), [`ai/planner.py`](./2.0/backend/ai/planner.py) | Adds a telemetry context, dispatches provider output by intent, creates UI response objects, and falls back to local rules/offline status. |
-| LLM gateway | [`ai/llm_provider.py`](./2.0/backend/ai/llm_provider.py) | Requests structured JSON from Gemini/Grok and attempts configured fallbacks. |
+| Assistant orchestration | [`core/ai_agent.py`](./2.0/backend/core/ai_agent.py), [`ai/planner.py`](./2.0/backend/ai/planner.py) | Handles recognized common requests locally; forwards unrecognized requests to an AI provider and creates UI responses. |
+| LLM gateway | [`ai/llm_provider.py`](./2.0/backend/ai/llm_provider.py) | Uses a compact JSON prompt and routes only to the selected Gemini or Grok provider/model. |
 | Telemetry and processes | [`core/live_telemetry.py`](./2.0/backend/core/live_telemetry.py), [`core/process_engine.py`](./2.0/backend/core/process_engine.py) | Reads host metrics and process information through `psutil`. |
 | ML | [`core/ml_inference.py`](./2.0/backend/core/ml_inference.py) | Loads serialized models and runs telemetry and log predictions. |
 | Operations | [`core/command_safety.py`](./2.0/backend/core/command_safety.py), [`core/file_finder.py`](./2.0/backend/core/file_finder.py), [`windows/apps.py`](./2.0/backend/windows/apps.py), [`ubuntu/bridge.py`](./2.0/backend/ubuntu/bridge.py) | Command screening, local file search, Windows app integration, and WSL command launching. |
@@ -73,19 +73,20 @@ flowchart LR
 ### Assistant request lifecycle
 
 1. The user selects Gemini or Grok and submits a question in the Assistant page.
-2. The browser sends the query, selected provider, and optional key to the local `/ask` endpoint.
-3. The backend validates the provider, samples telemetry, and sends the query plus a compact telemetry summary to the provider gateway.
-4. The selected cloud provider is tried first. The gateway may then try another configured cloud provider, Groq, or Ollama.
-5. The model is prompted to return structured JSON: an intent, response text, and optionally a proposed action.
-6. The planner formats the result for the UI. When providers return no usable result, the planner can try local rule handling and then an offline telemetry response.
-7. The UI renders the answer, recommendations, root-cause visualization, and any proposed commands. The user can choose Execute or Reject.
+2. The browser sends the query, selected provider, optional model, and optional key to the local `/ask` endpoint.
+3. The backend handles supported local requests first, including file search, known application/site actions, and explicit file creation.
+4. Only unrecognized requests go to the selected provider. Likely system-performance questions include a small telemetry summary.
+5. The model returns compact JSON with a response or at most one Windows command proposal and a risk assessment.
+6. Only the selected provider is called. If it does not respond, the planner returns an offline telemetry response that identifies the selected provider as unavailable.
+7. The UI renders the answer and any command with its AI and local risk assessments. Commands are never run automatically; the user must choose Execute or Reject, then review the captured output.
 
-Provider order for an Assistant request is:
+The command prompt tells the provider which shell actually executes commands (`cmd.exe` on Windows), the backend working directory, and that execution is non-interactive with output captured. PowerShell commands must explicitly invoke `powershell.exe`; bare PowerShell cmdlets are not valid CMD commands. The assistant does not claim command output before execution.
 
-- **Gemini selected:** Gemini → Grok → Groq → Ollama.
-- **Grok selected:** Grok → Gemini → Groq → Ollama.
+The runtime key entered in the UI is used only for the selected provider in that request. It is not stored. Select **Backend default** to use `GEMINI_MODEL` or `GROK_MODEL` from the backend environment.
 
-The runtime key entered in the UI is used for the selected provider in that request. Other cloud fallbacks use keys configured in the backend environment; Ollama requires a running local service.
+### Read-only local terminal
+
+The Assistant page's terminal is a restricted local console. It supports `help`, `pwd`, `cd <folder>`, `dir [folder] [--limit N]`, `ls [folder]`, `whoami`, `ipconfig`, `systeminfo`, and `tasklist`. Directory listing is capped at 100 entries. Commands are parsed by the backend and system-information commands are invoked without a shell; arbitrary command execution, command chaining, and file modification are not supported.
 
 ## 4. System telemetry and health scoring
 
@@ -142,7 +143,8 @@ The API is defined in [`backend/main.py`](./2.0/backend/main.py). The local defa
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/` | Service and model-loaded status. |
-| `POST` | `/ask` | Ask the assistant. Body includes `query`, optional `provider` (`gemini` or `grok`), and optional `api_key`. |
+| `POST` | `/ask` | Ask the assistant. Body includes `query`, optional `provider` (`gemini` or `grok`), optional `model`, and optional `api_key`. |
+| `POST` | `/terminal/run` | Run one allowlisted read-only command. Body includes `command` and optional working directory `cwd`. |
 | `POST` | `/commands/approve` | Execute a command supplied by the UI or looked up from recent history. |
 | `POST` | `/commands/reject` | Mark an action rejected in the response. |
 | `GET` | `/system/stats`, `/system/all` | Consolidated system metrics. |
@@ -175,13 +177,13 @@ The event collector reads recent records from the host’s Windows System and Ap
 - Voice input records audio in the browser and sends a short WAV recording to the local backend, where faster-whisper runs the multilingual Whisper small model on CPU with int8 quantization and voice-activity filtering. The model downloads once into the Hugging Face cache on first use. Audio is decoded and processed in memory; it is not saved or sent to Gemini/Grok.
 - Keys can alternatively be configured in the ignored local file `2.0/backend/.env`, using the variable names shown in [`backend/.env.example`](./2.0/backend/.env.example).
 - Do not put real keys in this document, source control, screenshots, or a research paper.
-- When a cloud provider is used, the user query and a compact telemetry summary (host OS/build, processor model, CPU, memory, swap, storage, network connectivity, health, and names of leading processes) are sent to that provider. The host name and boot timestamp are not included. Avoid sending sensitive queries if that is not acceptable.
+- When a cloud provider is used, the user query and execution context (OS, shell, backend working directory) are sent to that provider. A compact telemetry summary (host OS/build, processor model, CPU, memory, swap, storage, network connectivity, health, and names of leading processes) is added only for likely system-performance questions. The host name and boot timestamp are not included. Avoid sending sensitive queries or paths if that is not acceptable.
 
 ### Command handling and process control
 
-The command safety engine assigns heuristic risk levels and blocks several matching destructive command patterns. The Assistant UI presents proposed commands for user review before its Execute action calls the approval endpoint. The process-kill API is a separate operation.
+The command safety engine assigns heuristic risk levels and blocks several matching destructive command patterns. The Assistant UI presents proposed commands for user review before its Execute action calls the approval endpoint. That endpoint only executes commands present in local history and rejects unknown command IDs. The process-kill API is a separate operation.
 
-This is **not a formal sandbox or a complete security boundary**: the command rules are pattern-based, and some execution paths use the host shell. Review commands before approval and use the application only on a machine you control. The approval endpoint should also be strengthened before any multi-user or production deployment; for example, it currently has a success-shaped response when a command ID is not found.
+This is **not a formal sandbox or a complete security boundary**: the command rules are pattern-based, and some execution paths use the host shell. Review commands before approval and use the application only on a machine you control. The local API has no multi-user authentication and is not intended for production exposure.
 
 ## 8. Technology stack and repository map
 
@@ -233,9 +235,9 @@ To stop the application, close the backend and frontend terminal windows started
 | `GROK_MODEL` | Grok model name; defaults to `grok-4.7`. |
 | `GEMINI_MODEL` | Gemini model preference; defaults to `gemini-flash-lite-latest`. |
 | `LLM_PROVIDER` | Backend default preference; defaults to `gemini` when no provider is supplied. |
-| `GROQ_API_KEY` | Optional Groq fallback key. |
-| `OLLAMA_BASE_URL` | Local Ollama endpoint; defaults to `http://127.0.0.1:11434`. |
-| `OLLAMA_MODEL` | Local Ollama model; defaults to `llama3.2:1b`. |
+| `GROQ_API_KEY` | Used only by legacy helper modules; not used by the primary Assistant provider route. |
+| `OLLAMA_BASE_URL` | Local Ollama endpoint for legacy helper modules; defaults to `http://127.0.0.1:11434`. |
+| `OLLAMA_MODEL` | Local Ollama model for legacy helper modules; defaults to `llama3.2:1b`. |
 | `VITE_API_BASE_URL` | Frontend API base URL; defaults to `http://127.0.0.1:8000`. |
 | `VITE_USE_MOCK_API` | Set to `true` for frontend mock data; use `false` for the real backend. |
 

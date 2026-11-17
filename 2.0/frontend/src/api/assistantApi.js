@@ -9,13 +9,22 @@ import { apiClient } from './client';
  * @param {string} query
  * @returns {Promise<AssistantResponse>}
  */
-export async function askAssistant(query, { provider = 'gemini', apiKey = '' } = {}) {
+export async function askAssistant(query, { provider = 'gemini', model = '', apiKey = '' } = {}) {
   const { data } = await apiClient.post('/ask', {
     query,
     provider,
+    ...(model ? { model } : {}),
     ...(apiKey ? { api_key: apiKey } : {}),
   });
   return normaliseAssistantResponse(data);
+}
+
+export async function runReadOnlyTerminal(command, cwd = '') {
+  const { data } = await apiClient.post('/terminal/run', {
+    command,
+    ...(cwd ? { cwd } : {}),
+  });
+  return data;
 }
 
 export async function transcribeVoice(audio) {
@@ -31,9 +40,8 @@ export async function transcribeVoice(audio) {
  * @param {string} commandId
  * @param {string} requestId
  */
-export async function approveCommand(commandId, requestId, command) {
+export async function approveCommand(commandId, requestId) {
   const payload = { command_id: commandId, request_id: requestId };
-  if (command) payload.command = command;
   const { data } = await apiClient.post('/commands/approve', payload);
   return data;
 }
@@ -73,7 +81,10 @@ function normaliseCommand(cmd) {
   return {
     id:          cmd.id          ?? cmd.command_id ?? Math.random().toString(36).slice(2),
     command:     cmd.command     ?? cmd.cmd ?? '',
+    action:      cmd.action      ?? null,
+    file_path:   cmd.file_path   ?? null,
     risk_level:  cmd.risk_level  ?? 'LOW',
+    risk_reason: cmd.risk_reason ?? '',
     explanation: cmd.explanation ?? cmd.description ?? '',
   };
 }

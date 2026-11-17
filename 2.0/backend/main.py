@@ -14,11 +14,13 @@ from config import settings
 from core.live_telemetry import telemetry_collector
 from core.process_engine import process_engine
 from core.log_engine import log_engine
+from core.file_operations import create_empty_file
 from core.voice_engine import voice_engine
 from core.command_safety import command_safety_engine
 from core.database import db_engine
 from core.ai_agent import ai_agent
 from core.ml_inference import ml_engine
+from core.read_only_terminal import run_read_only_command
 
 # Initialize FastAPI App
 app = FastAPI(
@@ -42,12 +44,16 @@ app.add_middleware(
 class AskRequest(BaseModel):
     query: str
     provider: Literal["gemini", "grok"] = "gemini"
+    model: Optional[str] = Field(default=None, max_length=100)
     api_key: Optional[str] = Field(default=None, max_length=512, repr=False)
+
+class ReadOnlyTerminalRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=2000)
+    cwd: Optional[str] = Field(default=None, max_length=4096)
 
 class CommandApprovalRequest(BaseModel):
     command_id: str
     request_id: Optional[str] = None
-    command: Optional[str] = None
 
 class CommandRejectRequest(BaseModel):
     command_id: str
@@ -77,7 +83,30 @@ def read_root():
 def handle_ask(req: AskRequest):
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
-    return ai_agent.ask(req.query, provider=req.provider, api_key=req.api_key)
+    return ai_agent.ask(
+        req.query,
+        provider=req.provider,
+        api_key=req.api_key,
+        model=req.model,
+    )
+
+@app.post("/terminal/run")
+def run_terminal_command(req: ReadOnlyTerminalRequest):
+    try:
+        return run_read_only_command(req.command, req.cwd)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Access to this directory was denied.") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="This read-only system command is available on Windows only.",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Terminal operation failed: {exc}") from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
 
 @app.post("/voice/transcribe")
 async def transcribe_voice(request: Request):
@@ -112,25 +141,47 @@ async def transcribe_voice(request: Request):
 
 @app.post("/commands/approve")
 def handle_approve_command(req: CommandApprovalRequest):
-    # Lookup command or run directly if passed
-    cmd_to_run = req.command
-    if not cmd_to_run:
-        # Search history for command_id
-        history = db_engine.get_history(limit=20)
-        for h in history:
-            for c in h.get("commands", []):
-                if c.get("id") == req.command_id:
-                    cmd_to_run = c.get("command")
-                    break
-            if cmd_to_run:
+    saved_command = None
+    for history_item in db_engine.get_history(limit=200):
+        for command in history_item.get("commands", []):
+            if command.get("id") == req.command_id:
+                saved_command = command
                 break
-                
-    if not cmd_to_run:
+        if saved_command:
+            break
+
+    if saved_command and saved_command.get("action") == "create_file":
+        file_path = saved_command.get("file_path")
+        if not isinstance(file_path, str) or not file_path:
+            raise HTTPException(status_code=400, detail="The saved file path is invalid.")
+        try:
+            created_path = create_empty_file(file_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except FileExistsError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"A file already exists at {file_path}; it was not changed.",
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission denied while creating {file_path}.",
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not create {file_path}: {exc}",
+            ) from exc
         return {
             "success": True,
-            "output": f"Command '{req.command_id}' approved and marked as completed.",
-            "status": "success"
+            "output": f"Created empty file: {created_path}",
+            "status": "success",
         }
+
+    cmd_to_run = saved_command.get("command") if saved_command else None
+    if not cmd_to_run:
+        raise HTTPException(status_code=404, detail="The approved command could not be found.")
         
     res = command_safety_engine.execute_command(cmd_to_run)
     return res

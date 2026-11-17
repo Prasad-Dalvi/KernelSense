@@ -14,7 +14,11 @@ The frontend reads live values from the backend; mock telemetry is not enabled. 
 
 The launcher creates `2.0\backend\.venv`, installs the backend dependencies, and starts the API and frontend. If frontend dependencies are missing, it installs them with `npm ci`.
 
-On the Assistant page, select **Gemini** or **Grok (xAI)** and enter the matching API key in the password field, or configure `GEMINI_API_KEY` / `GROK_API_KEY` in `2.0\backend\.env` (copy `2.0\backend\.env.example` first). Keys entered in the page remain only in browser memory and are sent to the local backend for requests; they are not saved to browser storage. The backend tries the selected provider first, then configured fallback providers, and uses the local planner if those are unavailable.
+On the Assistant page, select **Gemini** or **Grok (xAI)**, choose a model (or the backend default), and enter that provider's API key in the password field, or configure `GEMINI_API_KEY` / `GROK_API_KEY` in `2.0\backend\.env` (copy `2.0\backend\.env.example` first). Keys entered in the page remain only in browser memory and are sent to the local backend for requests; they are not saved. Common supported requests are handled locally first. Unrecognized requests go only to the selected provider; a provider failure is reported without silently switching providers. Command suggestions show the provider's risk assessment and require explicit approval.
+
+The Assistant page also provides a local read-only terminal. It accepts `help`, `pwd`, `cd`, `dir`/`ls`, `whoami`, `ipconfig`, `systeminfo`, and `tasklist`; for example, `dir "C:\Users\HP\Desktop" --limit 5`. It does not execute arbitrary shell text or change files.
+
+Natural-language requests such as `list 5 files in folder "C:\path\to\folder"` are also handled locally and return a bounded, alphabetical file listing without making an AI-provider request.
 
 Project documentation, datasets, model files, and source files are retained; only generated caches/build output are treated as disposable.
 

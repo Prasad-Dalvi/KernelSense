@@ -16,8 +16,11 @@ _env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 load_dotenv(dotenv_path=_env_path, override=True)
 
 from ai.llm_provider import llm_gateway
+from core.directory_operations import list_directory_files, parse_directory_listing_request
 from core.file_finder import file_finder
+from core.file_operations import parse_file_creation_request, validate_file_target
 from core.process_engine import process_engine
+from core.command_safety import command_safety_engine
 from core.database import db
 from core.live_telemetry import telemetry_collector
 
@@ -90,28 +93,50 @@ class ReActPlanner:
         }
 
     # ──────────────────────────────────────────────────────────────────
-    # Main entry point: every query flows through Gemini
+    # Main entry point: local rules first, selected AI provider if needed
     # ──────────────────────────────────────────────────────────────────
     def plan_and_execute(
         self,
         query: str,
         provider: str = "gemini",
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        1. Collect live telemetry
-        2. Send query + telemetry to Gemini (primary) or fallback LLMs
-        3. Gemini returns structured JSON with intent + commands + markdown
-        4. We format and wrap for the KernelSense UI contract
+        Handle recognized requests locally; ask the selected provider only for
+        requests that the local rules do not recognize.
         """
-        telemetry_ctx = self._build_telemetry_context()
+        target_path = parse_file_creation_request(query)
+        if target_path is not None:
+            if not target_path:
+                return {
+                    "intent": "FILE_CREATE",
+                    "response": "Please specify the full path and file name, for example `create file C:\\Users\\you\\Desktop\\notes.txt`.",
+                    "tools_used": [],
+                    "execution_steps": [],
+                    "root_cause": None,
+                    "commands": [],
+                    "recommendations": ["Provide an absolute path and file name."],
+                }
+            return self._handle_file_create(target_path, query)
 
-        # Try the selected cloud provider and its configured fallbacks.
-        ai_result = llm_gateway.reason_and_plan(query, telemetry_ctx, provider, api_key)
+        try:
+            directory_request = parse_directory_listing_request(query)
+        except ValueError as exc:
+            return self._directory_listing_error(query, str(exc))
+        if directory_request is not None:
+            directory, limit = directory_request
+            return self._handle_directory_listing(directory, limit, query)
+
+        telemetry_ctx: Dict[str, Any] = {}
+        ai_result = self._local_rule_planner(query, telemetry_ctx)
+        if ai_result and ai_result.get("intent") == "GREETING":
+            telemetry_ctx = self._build_telemetry_context()
 
         if not ai_result:
-            # Deterministic local fallback if AI gateway is temporarily unavailable
-            ai_result = self._local_rule_planner(query, telemetry_ctx)
+            if self._needs_telemetry(query):
+                telemetry_ctx = self._build_telemetry_context()
+            ai_result = llm_gateway.reason_and_plan(query, telemetry_ctx, provider, api_key, model)
 
         if not ai_result:
             # Hard fallback: no cloud or local model provider is available.
@@ -144,6 +169,152 @@ class ReActPlanner:
         res.setdefault("intent", intent)
         res.setdefault("risk_level", "LOW")
         return res
+
+    def _handle_directory_listing(self, requested_path: str, limit: int, query: str) -> Dict[str, Any]:
+        try:
+            directory, files = list_directory_files(requested_path, limit)
+        except (ValueError, PermissionError, OSError) as exc:
+            return self._directory_listing_error(query, str(exc))
+
+        if files:
+            file_rows = "\n".join(f"- `{file_path.name}`" for file_path in files)
+            response = (
+                f"### Local Directory Listing\n\n"
+                f"Folder: `{directory}`\n\n{file_rows}"
+            )
+        else:
+            response = f"### Local Directory Listing\n\nNo files found in `{directory}`."
+
+        root_nodes = [
+            {"id": "request", "label": "List folder files", "type": "process"},
+            {"id": "directory", "label": str(directory), "type": "system"},
+            {"id": "results", "label": f"{len(files)} file(s)", "type": "impact"},
+        ]
+        root_edges = [
+            {"from": "request", "to": "directory"},
+            {"from": "directory", "to": "results"},
+        ]
+        self._save_history(
+            query,
+            response,
+            ["local_directory_listing"],
+            root_nodes,
+            root_edges,
+            [],
+            intent="DIRECTORY_LISTING",
+        )
+        return {
+            "intent": "DIRECTORY_LISTING",
+            "response": response,
+            "tools_used": ["local_directory_listing"],
+            "execution_steps": [{
+                "tool": "local_directory_listing",
+                "label": f"Listed {len(files)} file(s) in {directory}",
+                "status": "done",
+            }],
+            "root_cause": {"nodes": root_nodes, "edges": root_edges},
+            "commands": [],
+            "recommendations": [],
+        }
+
+    def _directory_listing_error(self, query: str, reason: str) -> Dict[str, Any]:
+        response = f"### Could Not List Folder\n\n{reason}"
+        self._save_history(
+            query,
+            response,
+            ["local_directory_listing"],
+            [{"id": "error", "label": "Directory listing failed", "type": "system"}],
+            [],
+            [],
+            intent="DIRECTORY_LISTING",
+        )
+        return {
+            "intent": "DIRECTORY_LISTING",
+            "response": response,
+            "tools_used": ["local_directory_listing"],
+            "execution_steps": [{
+                "tool": "local_directory_listing",
+                "label": "Directory listing failed",
+                "status": "error",
+            }],
+            "root_cause": {
+                "nodes": [{"id": "error", "label": "Directory listing failed", "type": "system"}],
+                "edges": [],
+            },
+            "commands": [],
+            "recommendations": ["Check the folder path and Windows permissions."],
+        }
+
+    @staticmethod
+    def _needs_telemetry(query: str) -> bool:
+        terms = (
+            "cpu", "processor", "memory", "ram", "disk", "storage",
+            "performance", "slow", "health", "temperature", "process",
+        )
+        query_lower = query.lower()
+        return any(term in query_lower for term in terms)
+
+    def _handle_file_create(self, requested_path: str, query: str) -> Dict[str, Any]:
+        try:
+            target_path = validate_file_target(requested_path)
+        except ValueError as exc:
+            return {
+                "intent": "FILE_CREATE",
+                "response": f"### File was not created\n\n{exc}",
+                "tools_used": [],
+                "execution_steps": [],
+                "root_cause": None,
+                "commands": [],
+                "recommendations": ["Correct the path and try again."],
+            }
+
+        command = {
+            "id": f"cmd-{uuid.uuid4().hex[:8]}",
+            "command": f"Create empty file: {target_path}",
+            "action": "create_file",
+            "file_path": str(target_path),
+            "risk_level": "LOW",
+            "explanation": (
+                "Creates a new, empty file only after you click Execute. "
+                "An existing file will not be overwritten."
+            ),
+        }
+        response_md = (
+            "### Create Empty File\n\n"
+            f"Target: `{target_path}`\n\n"
+            "Review the path and click **Execute** to create the file. "
+            "If a file already exists there, it will be left unchanged."
+        )
+        root_nodes = [
+            {"id": "request", "label": "Create file", "type": "process"},
+            {"id": "target", "label": str(target_path), "type": "system"},
+            {"id": "approval", "label": "Waiting for your approval", "type": "impact"},
+        ]
+        root_edges = [
+            {"from": "request", "to": "target"},
+            {"from": "target", "to": "approval"},
+        ]
+        commands = [command]
+        self._save_history(
+            query,
+            response_md,
+            ["local_file_creator"],
+            root_nodes,
+            root_edges,
+            commands,
+            intent="FILE_CREATE",
+        )
+        return {
+            "intent": "FILE_CREATE",
+            "response": response_md,
+            "tools_used": ["local_file_creator"],
+            "execution_steps": [
+                {"tool": "local_file_creator", "label": "Prepared a safe file creation action", "status": "done"}
+            ],
+            "root_cause": {"nodes": root_nodes, "edges": root_edges},
+            "commands": commands,
+            "recommendations": ["Verify the target path before approving."],
+        }
 
     # ──────────────────────────────────────────────────────────────────
     # Handler: Greeting
@@ -427,24 +598,58 @@ Searched all local drives for **`{search_target}`** — no matching files found.
     def _format_general(self, ai_result: Dict, query: str, telemetry: Dict, provider: str) -> Dict:
         response_md = ai_result.get("response_markdown") or f"### KernelSense AI Response\n\n*No response generated for: `{query}`*"
 
-        # Convert any proposed_commands from Gemini into Ubuntu WSL2 execution blocks
+        # Keep the agent's Windows command intact; show its risk before approval.
         proposed_commands = []
-        for pc in ai_result.get("proposed_commands", []):
+        blocked_reason = None
+        raw_commands = ai_result.get("proposed_commands", [])
+        if not isinstance(raw_commands, list) or ai_result.get("intent") == "NEEDS_CLARIFICATION":
+            raw_commands = []
+        for pc in raw_commands[:1]:
+            if not isinstance(pc, dict):
+                continue
             raw = pc.get("command", "")
-            if raw:
-                if not raw.startswith("wsl.exe"):
-                    raw = f'wsl.exe -d Ubuntu bash -c "{raw}; exec bash"'
+            if isinstance(raw, str) and raw.strip():
+                local_risk = command_safety_engine.evaluate_risk(raw)
+                if not local_risk["safe"]:
+                    blocked_reason = local_risk["explanation"]
+                    continue
+                ai_risk = str(pc.get("risk_level", "HIGH")).upper()
+                risk_levels = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+                if ai_risk not in risk_levels:
+                    ai_risk = "HIGH"
+                effective_risk = max(
+                    (ai_risk, local_risk["risk_level"]),
+                    key=lambda level: risk_levels.get(level, 2),
+                )
+                risk_reason = str(pc.get("risk_reason", "")).strip()
+                if not risk_reason:
+                    risk_reason = "AI risk assessment was missing; treated as high risk."
+                if local_risk["risk_level"] != "LOW":
+                    risk_reason = "; ".join(
+                        part for part in (risk_reason, local_risk["explanation"]) if part
+                    )
                 proposed_commands.append({
                     "id": f"cmd-{uuid.uuid4().hex[:8]}",
                     "command": raw,
-                    "explanation": pc.get("explanation", "")
+                    "risk_level": effective_risk,
+                    "risk_reason": risk_reason,
+                    "explanation": pc.get("explanation", ""),
                 })
+
+        if proposed_commands:
+            response_md = (
+                "### Command ready for approval\n\n"
+                "The command has not run yet. Review its risk and click **Execute** "
+                "to run it; captured output will appear below the command."
+            )
+        elif blocked_reason:
+            response_md = f"### Command blocked\n\n{blocked_reason}"
 
         health = telemetry.get("system_health_score")
         health_label = f"{health}%" if isinstance(health, (int, float)) else "unavailable"
         root_nodes = ai_result.get("root_cause_nodes") or [
             {"id": "q",  "label": f"Query: {query[:30]}", "type": "process"},
-            {"id": "ai", "label": f"Gemini AI ({provider})", "type": "system"},
+            {"id": "ai", "label": f"AI Agent ({provider})", "type": "system"},
             {"id": "hw", "label": f"Health: {health_label}", "type": "impact"}
         ]
         root_edges = ai_result.get("root_cause_edges") or [
@@ -452,21 +657,21 @@ Searched all local drives for **`{search_target}`** — no matching files found.
         ]
 
         intent_name = ai_result.get("intent", "GENERAL_QUERY")
-        self._save_history(query, response_md, ["gemini_ai"], root_nodes, root_edges, proposed_commands, intent=intent_name)
+        self._save_history(query, response_md, ["ai_agent"], root_nodes, root_edges, proposed_commands, intent=intent_name)
         return {
             "response": response_md,
-            "tools_used": ["gemini_ai", "telemetry_collector"],
-            "execution_steps": [
-                {"tool": "telemetry_collector", "label": "Sampled live OS telemetry", "status": "done"},
-                {"tool": "gemini_ai",           "label": f"Reasoned with {provider}",  "status": "done"}
-            ],
+            "tools_used": ["ai_agent"] + (["telemetry_collector"] if telemetry else []),
+            "execution_steps": (
+                [{"tool": "telemetry_collector", "label": "Sampled live OS telemetry", "status": "done"}]
+                if telemetry else []
+            ) + [{"tool": "ai_agent", "label": f"Reasoned with {provider}", "status": "done"}],
             "root_cause": {"nodes": root_nodes, "edges": root_edges},
             "commands": proposed_commands,
             "recommendations": ai_result.get("recommendations", [])
         }
 
     # ──────────────────────────────────────────────────────────────────
-    # Local Rule-Based Planner (Bulletproof fallback when AI is unreachable)
+    # Local rules handle common requests before any provider call.
     # ──────────────────────────────────────────────────────────────────
     def _local_rule_planner(self, query: str, telemetry: Dict) -> Optional[Dict[str, Any]]:
         q = query.strip().lower()
@@ -482,8 +687,14 @@ Searched all local drives for **`{search_target}`** — no matching files found.
 
         # 2. File search / open
         has_ext = bool(re.search(r'\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|json|log|py|java|cpp|c|html|css|js)\b', q, re.I))
-        is_file_kw = any(q.startswith(p) for p in ["find ", "search ", "locate "]) or "file" in q or "notes" in q or "pdf" in q
-        if has_ext or (is_file_kw and not q.startswith("open chrome") and not q.startswith("open brave")):
+        file_search_prefixes = (
+            "find ", "search ", "search for ", "locate ", "open ", "read ", "show "
+        )
+        is_file_search = any(q.startswith(prefix) for prefix in file_search_prefixes) and has_ext
+        is_file_search = is_file_search or any(
+            phrase in q for phrase in ("find file ", "search files ", "locate file ")
+        )
+        if is_file_search and not q.startswith(("open chrome", "open brave")):
             target = file_finder.clean_target(query)
             return {
                 "intent": "FILE_SEARCH",
@@ -611,7 +822,7 @@ Searched all local drives for **`{search_target}`** — no matching files found.
         api_key_name = "GROK_API_KEY" if provider == "grok" else "GEMINI_API_KEY"
         response_md = f"""### 🛡️ KernelSense System Status (Offline Mode)
 
-> **⚠️ AI Provider Unavailable** — {provider} and configured fallbacks could not answer. Values below come from the host telemetry collector.
+> **⚠️ Selected AI Provider Unavailable** — {provider} did not answer; no provider switch was made. Values below come from the host telemetry collector.
 
 #### 📊 Live Hardware Telemetry:
 * **Operating System:** `{host.get('os_name') or 'Unavailable'}`

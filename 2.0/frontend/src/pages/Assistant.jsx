@@ -3,19 +3,67 @@ import { RotateCcw, Copy, Check, Sparkles, Terminal, Bot, Send, Zap, Mic, MicOff
 import { useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import { useAssistant } from '../hooks/useAssistant';
-import { transcribeVoice } from '../api/assistantApi';
+import { runReadOnlyTerminal, transcribeVoice } from '../api/assistantApi';
 import { sound } from '../utils/soundEffects';
 import CommandApproval from '../components/CommandApproval';
 import ToolProgress from '../components/ToolProgress';
 import RootCauseTree from '../components/RootCauseTree';
 import styles from './Assistant.module.css';
 
+const PROVIDER_MODELS = {
+  gemini: [
+    { value: '', label: 'Backend default' },
+    { value: 'gemini-3.1-flash-lite-preview', label: 'Gemini 3.1 Flash-Lite Preview' },
+    { value: 'gemini-flash-lite-latest', label: 'Gemini Flash-Lite' },
+    { value: 'gemini-flash-latest', label: 'Gemini Flash' },
+  ],
+  grok: [
+    { value: '', label: 'Backend default' },
+    { value: 'grok-4.7', label: 'Grok 4.7' },
+    { value: 'grok-4.6', label: 'Grok 4.6' },
+    { value: 'grok-4.5', label: 'Grok 4.5' },
+    { value: 'grok-4.3', label: 'Grok 4.3' },
+    { value: 'grok-4.20-0309-reasoning', label: 'Grok 4.20 Reasoning' },
+    { value: 'grok-4.20-0309-non-reasoning', label: 'Grok 4.20 Non-Reasoning' },
+  ],
+};
+
+function readSessionPreference(key, fallback = '') {
+  try {
+    return window.sessionStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeSessionPreference(key, value) {
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // The preference remains active for the current page even if storage is unavailable.
+  }
+}
+
 export default function Assistant() {
   const { messages, loading, error, sendMessage, handleApprove, handleReject, clearMessages } = useAssistant();
   const [input, setInput] = useState('');
-  const [provider, setProvider] = useState('gemini');
+  const [provider, setProvider] = useState(() => {
+    const saved = readSessionPreference('kernelsense.provider', 'gemini');
+    return saved === 'grok' ? 'grok' : 'gemini';
+  });
+  const [selectedModels, setSelectedModels] = useState(() => ({
+    gemini: readSessionPreference('kernelsense.model.gemini'),
+    grok: readSessionPreference('kernelsense.model.grok'),
+  }));
+  const model = selectedModels[provider];
   const [apiKeys, setApiKeys] = useState({ gemini: '', grok: '' });
   const apiKey = apiKeys[provider];
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalCommand, setTerminalCommand] = useState('');
+  const [terminalCwd, setTerminalCwd] = useState('');
+  const [terminalOutput, setTerminalOutput] = useState('');
+  const [terminalBusy, setTerminalBusy] = useState(false);
+  const [terminalError, setTerminalError] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const bottomRef = useRef(null);
   const autoSubmittedRef = useRef(false);
@@ -41,9 +89,9 @@ export default function Assistant() {
       autoSubmittedRef.current = true;
       setSearchParams({}, { replace: true });
       sound.send();
-      sendMessage(q, { provider, apiKey });
+      sendMessage(q, { provider, model, apiKey });
     }
-  }, [searchParams, setSearchParams, sendMessage, provider, apiKey]);
+  }, [searchParams, setSearchParams, sendMessage, provider, model, apiKey]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -69,7 +117,28 @@ export default function Assistant() {
     if (!q.trim() || loading || isRecording || isTranscribing) return;
     sound.send();
     setInput('');
-    sendMessage(q, { provider, apiKey });
+    sendMessage(q, { provider, model, apiKey });
+  };
+
+  const runTerminal = async (event) => {
+    event.preventDefault();
+    const command = terminalCommand.trim();
+    if (!command || terminalBusy) return;
+
+    setTerminalCommand('');
+    setTerminalBusy(true);
+    setTerminalError('');
+    setTerminalOutput((output) => `${output}${output ? '\n' : ''}${terminalCwd || 'local'}> ${command}\n`);
+    try {
+      const result = await runReadOnlyTerminal(command, terminalCwd);
+      setTerminalCwd(result.cwd);
+      setTerminalOutput((output) => `${output}${result.output || '(no output)'}\n`.slice(-16000));
+      if (!result.success) setTerminalError('The command returned an error.');
+    } catch (requestError) {
+      setTerminalError(requestError?.message ?? 'The read-only terminal request failed.');
+    } finally {
+      setTerminalBusy(false);
+    }
   };
 
   const onKey = (e) => {
@@ -248,6 +317,15 @@ export default function Assistant() {
               <span>Clear History</span>
             </button>
           )}
+          <button
+            className={styles.terminalToggle}
+            onClick={() => setTerminalOpen((open) => !open)}
+            aria-expanded={terminalOpen}
+            type="button"
+          >
+            <Terminal size={12} />
+            <span>{terminalOpen ? 'Hide Terminal' : 'Open Terminal'}</span>
+          </button>
         </div>
 
         <div className={styles.providerControls}>
@@ -255,11 +333,29 @@ export default function Assistant() {
             <span>Ask agent with</span>
             <select
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
+              onChange={(e) => {
+                setProvider(e.target.value);
+                writeSessionPreference('kernelsense.provider', e.target.value);
+              }}
               disabled={loading}
             >
               <option value="gemini">Gemini</option>
               <option value="grok">Grok (xAI)</option>
+            </select>
+          </label>
+          <label className={styles.providerField}>
+            <span>Model</span>
+            <select
+              value={model}
+              onChange={(e) => {
+                setSelectedModels((models) => ({ ...models, [provider]: e.target.value }));
+                writeSessionPreference(`kernelsense.model.${provider}`, e.target.value);
+              }}
+              disabled={loading}
+            >
+              {PROVIDER_MODELS[provider].map((option) => (
+                <option key={option.value || 'backend-default'} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </label>
           <label className={styles.providerField}>
@@ -274,8 +370,39 @@ export default function Assistant() {
               disabled={loading}
             />
           </label>
-          <span className={styles.keyPrivacyNote}>Used for this browser session only; not saved.</span>
+          <span className={styles.keyPrivacyNote}>Sent only to this provider through the local backend; not saved.</span>
         </div>
+
+        {terminalOpen && (
+          <section className={styles.terminalPanel} aria-label="Read-only local terminal">
+            <div className={styles.terminalHeader}>
+              <span>WINDOWS LOCAL TERMINAL · READ ONLY</span>
+              <span>{terminalCwd || 'Working directory loads on first command'}</span>
+            </div>
+            <pre className={styles.terminalOutput} aria-live="polite">
+              {terminalOutput || 'Type help to see the supported commands.'}
+            </pre>
+            {terminalError && <p className={styles.terminalError} role="alert">{terminalError}</p>}
+            <form className={styles.terminalForm} onSubmit={runTerminal}>
+              <span className={styles.terminalPrompt}>{terminalCwd || 'local'}&gt;</span>
+              <input
+                value={terminalCommand}
+                onChange={(event) => setTerminalCommand(event.target.value)}
+                placeholder='help, pwd, cd "folder", dir "folder" --limit 5, whoami...'
+                aria-label="Read-only terminal command"
+                autoComplete="off"
+                spellCheck="false"
+                disabled={terminalBusy}
+              />
+              <button type="submit" disabled={terminalBusy || !terminalCommand.trim()}>
+                {terminalBusy ? 'Running…' : 'Run'}
+              </button>
+            </form>
+            <p className={styles.terminalNote}>
+              Only directory listing/navigation and system information are allowed; no arbitrary shell commands or file changes.
+            </p>
+          </section>
+        )}
 
         <div className={styles.inputWrap}>
           <textarea

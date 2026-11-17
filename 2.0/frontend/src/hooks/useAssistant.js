@@ -43,33 +43,7 @@ export function useAssistant() {
 
   const handleApprove = useCallback(async (commandId, requestId) => {
     try {
-      // Find command string directly from latest messages state
-      let cmdToRun = '';
-      const reversedMessages = [...messages].reverse();
-      for (const m of reversedMessages) {
-        if (requestId && m.request_id && m.request_id !== requestId) continue;
-        if (m.commands) {
-          const found = m.commands.find((c) => c.id === commandId);
-          if (found) {
-            cmdToRun = found.command || '';
-            break;
-          }
-        }
-      }
-
-      if (!cmdToRun) {
-        for (const m of reversedMessages) {
-          if (m.commands) {
-            const found = m.commands.find((c) => c.id === commandId);
-            if (found) {
-              cmdToRun = found.command || '';
-              break;
-            }
-          }
-        }
-      }
-
-      const result = await approveCommand(commandId, requestId, cmdToRun);
+      const result = await approveCommand(commandId, requestId);
       setMessages((prev) =>
         prev.map((m) => {
           if (!m.commands) return m;
@@ -84,7 +58,7 @@ export function useAssistant() {
     } catch (err) {
       setError(err?.message ?? 'Command execution failed.');
     }
-  }, [messages]);
+  }, []);
 
   const handleReject = useCallback(async (commandId, requestId) => {
     try {
